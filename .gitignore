@@ -1,0 +1,14 @@
+# .gitignore
+
+__pycache__/
+*.py[cod]
+
+.history
+
+# pyenv
+.python-version
+.pyhist
+
+# vim files
+.*.swp
+

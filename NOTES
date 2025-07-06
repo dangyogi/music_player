@@ -1,0 +1,67 @@
+Python ALSA midi library
+
+    pip install alsa-midi
+
+MIDI beat clock
+
+    ppq (pulse == tick)
+      - 24 is MIDI File Spec standard: 2x2x2x3
+      - ppq should be multiple of 24
+      - besides 24: 96 (24x4), 240 (24x10), 384 (24x16) and 480 (24x20) are most common
+        - 96 and 384 are most applicable to recording human timing nuances
+    tempo (bpm) beat == quarter note
+      - uSec/pulse: 60,000,000 / (ppq * bpm)
+
+    MIDI Commands:
+
+        0xF8 Clock: single-byte MIDI clock tick always at 24 per quarter note
+        0xFA Start: single-byte, first tick after this marks the initial downbeat,
+                    also restarts from the beginning
+        0xFC Stop: single-byte, Master may continue sending Ticks, but slaves ignore them for
+                   advancing the song position
+        0xFB Continue: single-byte, resume from last stopped position
+        0xF2 Song Position Pointer: 3-byte, LSB first.  Song position is MIDI beats
+             (16th notes == 6 clock pulses, or 24 ppq)
+
+        Standard MIDI resolution is 24 ppq
+
+        Usually start playing with a SPP message.
+
+ALSA Queues:
+
+    memory pool per client.  Same pool Used for all input/output.  May be shared by multiple clients.
+        snd_seq_set_client_pool_output() sets output pool size
+        snd_seq_set_client_pool_output_room() sets output room size, used to wake up blocking write call
+        snd_seq_set_client_pool_input() sets input pool size
+
+    event: snd_seq_event_t
+        flags
+            timestamp: real-time or song-ticks
+            time-mode: absolute or relative to current time
+        timestamp
+        scheduling queue id
+        source addr (client-id:port-id)
+        dest addr
+        event data (up to 12 bytes)
+
+        use SND_SEQ_QUEUE_DIRECT as target queue id to send directly (bypassing queue)
+
+        snd_seq_ev_schedule_real()
+        snd_seq_ev_schedule_tick()
+
+        ALSA sets source.client, sender sets source.port, and dest.client, dest.port to deliver to that
+        dest (ignoring subscriptions, I think).  Set dest.client to SND_SEQ_ADDRESS_SUBSCRIBERS to send
+        to subscribers.
+
+        SYSTEM:TIMER, dest for queue events like start, stop, continue, change tempo, etc.  Received
+        events are broadcast to all subscribed clients
+
+        SYSTEM:ANNOUNCE is read only.
+
+        priority: normal, high
+
+        ppq can not be changed while queue is running
+
+        default: 96 ppq, 120 BPM
+
+        snd_seq_change_queue_tempo()  can be queued!
