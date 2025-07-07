@@ -7,11 +7,11 @@ from xml.etree.ElementTree import Element, parse, fromstring
 
 container = 'META-INF/container.xml'
 
-def as_class(cls, trace=False, dump=True):
+def as_class(cls, trace=False, show_props=True, dump=True):
     def factory(name, props):
-        if trace:
+        if trace and show_props:
             print(f"as_class({cls.__name__}): {name=}, {props=}")
-        obj = cls(name, props)
+        obj = cls(name, props, trace)
         if trace and dump and hasattr(obj, 'dump'):
             obj.dump(2)
         return name, obj
@@ -20,9 +20,10 @@ def as_class(cls, trace=False, dump=True):
 class Attrs:
     r'''Converts hyphenated names to underscores.
     '''
-    omit = frozenset("name child_num measure_number".split())
+    omit = frozenset("name child_num measure_number trace".split())
 
-    def __init__(self, name, props):
+    def __init__(self, name, props, trace=False):
+        self.trace = trace
         self.name = name
         for key, value in props.items():
             setattr(self, key.replace('-', '_'), value)
@@ -403,7 +404,8 @@ class Note:
     #   tuplet: type (e.g., start, stop), bracket (e.g., yes, no), show-number (e.g., none)
     #           looks like number defaults to 3, not sure how a different number is specified
 
-    def __init__(self, name, properties):
+    def __init__(self, name, properties, trace=False):
+        self.trace = trace
         self.name = name
         for key, value in properties.items():
             if key == 'pitch':
@@ -462,7 +464,7 @@ class Note:
             print(f" {self.tie=}", end='')
         print()
 
-Notexml = Parser("note", as_class(Note, True),
+Notexml = Parser("note", as_class(Note),
               ignore="attr-default-x attr-default-y accidental stem beam".split(),
               save="attr-dynamics attr-print-object duration voice staff".split(),
               children=(Pitch, Type, Chord, Rest, Tie, Dot, Cue, Grace, Time_modification, Notations),
@@ -512,13 +514,14 @@ class Measure:
     #   repeat: forward, backward
     #     forward: heavy-light bar-style
     #     backward: only in stop ending
-    #   ending: number (e.g., 1, 2), style: start, stop
+    #   ending: number (e.g., 1, 2), type: start, stop
     #     start/stop brackets the ending, same number:
     #       start on left, no bar-style
     #       stop on right, stop also has light-light or light-heavy (w/repeat backward) bar-style
     #   light-light)
 
-    def __init__(self, name, properties):
+    def __init__(self, name, properties, trace=False):
+        self.trace = trace
         self.name = name
         self.number = properties['number']
         children = []
@@ -526,16 +529,22 @@ class Measure:
             if type in properties:
                 for child in properties[type]:
                     child.measure_number = self.number
-                    if type == 'note' and hasattr(child, 'print-object') and child.print-object == 'no':
+                    if type == 'note' and hasattr(child, 'print_object') and child.print_object == 'no':
+                        if trace:
+                            print(f"Measure({self.number}): dropping {child}, has print-object == 'no'")
                         pass  # drop notes with print-object == 'no'
                     else:
                         children.append(child)
                     if type == 'barline':
                         if child.location == 'left':
+                            if trace:
+                                print(f"Measure({self.number}): got barline left")
                             if hasattr(child, "bar_style") and child.bar_style.startswith('light-'):
-                                print(f"Measure({self.number}) got {child.bar-style} barline on left")
+                                print(f"Measure({self.number}) got {child.bar_style} barline on left")
                             if hasattr(child, "repeat"):
                                 if child.repeat == 'forward':
+                                    if trace:
+                                        print(f"Measure({self.number}): repeat_forward set")
                                     self.repeat_forward = True
                                 elif child.repeat == 'backward':
                                     print(f"Measure({self.number}) got repeat backward barline on left")
@@ -543,18 +552,25 @@ class Measure:
                                     print(f"Measure({self.number}) got unknown repeat {child.repeat} "
                                            "barline on left")
                             if hasattr(child, "ending"):
-                                if child.ending.style == 'start':
+                                if child.ending.type == 'start':
                                     self.ending_start = child.ending.number
-                                elif child.ending.style == 'stop':
+                                    if trace:
+                                        print(f"Measure({self.number}): "
+                                              f"ending_start = {self.ending_start}")
+                                elif child.ending.type == 'stop':
                                     print(f"Measure({self.number}) got stop ending barline on left")
                                 else:
-                                    print(f"Measure({self.number}) got unknown ending style "
-                                          f"{child.ending.style} barline on left")
+                                    print(f"Measure({self.number}) got unknown ending type "
+                                          f"{child.ending.type} barline on left")
                         elif child.location == 'right':
+                            if trace:
+                                print(f"Measure({self.number}): got barline right")
                             if hasattr(child, "bar_style") and child.bar_style == 'heavy-light':
                                 print(f"Measure({self.number}) got heavy-light barline on right")
                             if hasattr(child, "repeat"):
                                 if child.repeat == 'backward':
+                                    if trace:
+                                        print(f"Measure({self.number}): repeat_backward set")
                                     self.repeat_backward = True
                                 elif child.repeat == 'forward':
                                     print(f"Measure({self.number}) got repeat forward barline on right")
@@ -562,13 +578,16 @@ class Measure:
                                     print(f"Measure({self.number}) got unknown repeat {child.repeat} "
                                            "barline on right")
                             if hasattr(child, "ending"):
-                                if child.ending.style == 'stop':
+                                if child.ending.type == 'stop':
                                     self.ending_stop = child.ending.number
-                                elif child.ending.style == 'start':
+                                    if trace:
+                                        print(f"Measure({self.number}): "
+                                              f"ending_stop = {self.ending_stop}")
+                                elif child.ending.type == 'start':
                                     print(f"Measure({self.number}) got start ending barline on right")
                                 else:
-                                    print(f"Measure({self.number}) got unknown ending style "
-                                          f"{child.ending.style} barline on right")
+                                    print(f"Measure({self.number}) got unknown ending type "
+                                          f"{child.ending.type} barline on right")
                         else:
                             print(f"Measure({self.number}) got barline with "
                                   f"location {child.location}, expected left or right")
@@ -582,7 +601,7 @@ class Measure:
             else:
                 child.dump(indent + 2)
 
-Measurexml = Parser("measure", as_class(Measure, True, False),
+Measurexml = Parser("measure", as_class(Measure),
                     ignore="attr-width print".split(),
                     save="attr-number".split(),
                     children=(Attributes, Direction, Backup, Forward, Notexml, Barline),
@@ -629,6 +648,9 @@ def parse(filename):
     parts = Score_partwise.parse(root)[1]
     for part in parts:
         part.measure_unwound = unwind_repeats(part.measure)
+        print(f"part(part.id): {len(part.measure)=}, {len(part.measure_unwound)=}")
+    return parts
+
 
 class measure_list:
     def __init__(self):
@@ -638,24 +660,26 @@ class measure_list:
     def next_measure(self, measure):
         r'''Returns True if done.
         '''
-        if measure.repeat_forward:
-            self.repeat = repeat(measure)
-        elif self.repeat:
+        #print(f"measure_list got {measure.number=}, {len(self.body)=}")
+        if self.repeat:
             if self.repeat.next_measure(measure):
                 self.body.append(self.repeat)
                 self.repeat = None
+        elif measure.repeat_forward:
+            self.repeat = repeat(measure)
         else:
             if measure.ending_start or measure.ending_stop or measure.repeat_backward:
                 print(f"measure_list: ending outside of repeat in measure {measure.number}")
             self.body.append(measure)
         return False
 
-    def iter(self):
+    def __iter__(self):
         if self.repeat:
             print("measure_list: repeat not ended properly at end of part")
+        #print(f"measure_list: {len(self.body)=}")
         for measure in self.body:
             if isinstance(measure, repeat):
-                yield from repeat.unwind()
+                yield from measure.unwind()
             else:
                 yield measure
 
@@ -668,9 +692,16 @@ class repeat:
     def next_measure(self, measure):
         r'''Returns True if repeat is done.
         '''
-        if measure.ending_start:
+        if self.repeat:
+            if self.repeat.next_measure(measure):
+                self.body.append(self.repeat)
+                self.repeat = None
+        elif measure.ending_start:
             self.endings.append([measure])
             self.ending_done = measure.ending_stop
+            if self.ending_done and not measure.repeat_backward:
+                #self.report_size()
+                return True
         elif measure.ending_stop:
             if not self.endings:
                 print(f"repeat: extranious ending_stop, measure {measure.number}")
@@ -679,19 +710,20 @@ class repeat:
             self.endings[-1].append(measure)
             self.ending_done = True
             if not measure.repeat_backward:
+                #self.report_size()
                 return True  # all done!
         elif self.endings:
             self.endings[-1].append(measure)
-        elif self.repeat:
-            if self.repeat.next_measure(measure):
-                self.body.append(self.repeat)
-                self.repeat = None
         else:
             if measure.repeat_forward:
                 self.repeat = repeat(measure)
             else:
                 self.body.append(measure)
         return False
+
+    def report_size(self):
+        print(f"repeat({self.body[0].number}) got {len(self.body)=} "
+              f"endings={tuple(len(ending) for ending in self.endings)}")
 
     def unwind(self, prefix=''):
         for num, ending in enumerate(self.endings, 1):
@@ -702,6 +734,10 @@ class repeat:
                     measure_copy = deepcopy(measure)
                     measure_copy.number = f"{measure_copy.number}{prefix}.{num}"
                     yield measure_copy
+            for measure in ending:
+                measure_copy = deepcopy(measure)
+                measure_copy.number = f"{measure_copy.number}{prefix}.{num}"
+                yield measure_copy
 
 
 
