@@ -366,6 +366,7 @@ class Note:
     grace = None
     time_modification = None
     notations = None
+    ignore = False
 
     # dynamics: volume e.g., 58.89
     # print-object: e.g., no (ignore these!)
@@ -383,7 +384,7 @@ class Note:
     #   grace notes don't have a duration and don't add to the rhythmic value of the measure
     #   a slash is played quickly before the main note
     #   otherwise, held longer, often on the beat, and may emphazied more strongly than the main note
-    # time_modification: actual-notes (e.g., 3), normal-notes (e.g, 2)
+    # time_modification: actual-notes (e.g., 3), normal-notes (e.g, 2) (see tuplet)
     # notations:
     #   tied: e.g., start, stop
     #   slur: type (e.g., start, stop), number (e.g, 1)
@@ -401,7 +402,17 @@ class Note:
     #   fermata (hold): e.g., upright, inverted (below the note)
     #   ornaments: trill-mark (True)
     #   tuplet: type (e.g., start, stop), bracket (e.g., yes, no), show-number (e.g., none)
-    #           looks like number defaults to 3, not sure how a different number is specified
+    #           the number of notes in the tuplet are played in the same amount of time as the
+    #           length of the tuplet.
+    #
+    #           This is given in a time-modification showing the actual number
+    #           of notes in the tuplet (actual_notes) vs the normal number of those size notes
+    #           (normal_notes) in the same same time span.  This gives a precise adjustment to the
+    #           note's duration.  The time-modification is duplicated in each note of the tuplet.
+    #
+    #           The duration of each note in the tuplet has this modification factored into it
+    #           (normal duration * normal_notes/actual_notes), but the result is constrained to
+    #           fit in an integer (not sure if it's rounded or truncated).
 
     def __init__(self, name, properties, trace=False):
         self.trace = trace
@@ -421,7 +432,7 @@ class Note:
             else:
                 #if key == 'tie' and len(value) > 1:
                 #    print(f"Note: got more than one tie: {value}")
-                setattr(self, key, value)
+                setattr(self, key.replace('-', '_'), value)
         if hasattr(self, 'type') and hasattr(self.type, 'size'):
             if self.type.size != 'cue':
                 print(f"Note got type.size != cue, got {self.type.size} instead")
@@ -528,12 +539,13 @@ class Measure:
             if type in properties:
                 for child in properties[type]:
                     child.measure_number = self.number
-                    if type == 'note' and hasattr(child, 'print_object') and child.print_object == 'no':
-                        if trace:
-                            print(f"Measure({self.number}): dropping {child}, has print-object == 'no'")
-                        pass  # drop notes with print-object == 'no'
-                    else:
-                        children.append(child)
+                    #if type == 'note' and hasattr(child, 'print_object') and child.print_object == 'no':
+                    #    if trace:
+                    #        print(f"Measure({self.number}): dropping {child}, has print-object == 'no'")
+                    #    pass  # drop notes with print-object == 'no'
+                    #else:
+                    #    children.append(child)
+                    children.append(child)
                     if type == 'barline':
                         if child.location == 'left':
                             if trace:
@@ -634,13 +646,13 @@ def parse(filename):
         container_xml = xml_zip.read(container)
         #print(container_xml)
         root = fromstring(container_xml)
-        print('root', root.tag)
-        print('root children', [e.tag for e in root])
+        #print('root', root.tag)
+        #print('root children', [e.tag for e in root])
         rootfiles = root.find('rootfiles')
         files = [x.get('full-path') for x in rootfiles.findall('rootfile')]
         assert len(files) == 1, f"expected one file in musicxml zip file, got {len(files)}"
         musicxml = files[0]
-        print("rootfile", musicxml)
+        #print("rootfile", musicxml)
 
         root = fromstring(xml_zip.read(musicxml))
     assert root.tag == "score-partwise", f"Expected root tag of 'score-partwise', got {root.tag}"

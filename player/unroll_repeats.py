@@ -32,7 +32,7 @@ class measure_list:
         #print(f"measure_list: {len(self.body)=}")
         for measure in self.body:
             if isinstance(measure, repeat):
-                yield from measure.unwind()
+                yield from measure.unroll()
             else:
                 yield measure
 
@@ -78,11 +78,11 @@ class repeat:
         print(f"repeat({self.body[0].number}) got {len(self.body)=} "
               f"endings={tuple(len(ending) for ending in self.endings)}")
 
-    def unwind(self, prefix=''):
+    def unroll(self, prefix=''):
         for num, ending in enumerate(self.endings, 1):
             for measure in self.body:
                 if isinstance(measure, repeat):
-                    yield from measure.unwind(f"{prefix}.{num}")
+                    yield from measure.unroll(f"{prefix}.{num}")
                 else:
                     measure_copy = deepcopy(measure)
                     measure_copy.number = f"{measure_copy.number}{prefix}.{num}"
@@ -146,12 +146,13 @@ def unroll_repeats(measures):
     return list(ml)
 
 
-def unroll_parts(parts):
+def unroll_parts(parts, trace=False):
     new_parts = []
     for part in parts:
-        measures_unwound = unroll_repeats(part.measure)
-        print(f"part(part.id): {len(part.measure)=}, {len(measures_unwound)=}")
-        new_parts.append((part.score_part, measures_unwound))
+        measures_unrolled = unroll_repeats(part.measure)
+        if trace:
+            print(f"part({part.id}): {len(part.measure)=}, {len(measures_unrolled)=}")
+        new_parts.append((part.score_part, measures_unrolled))
     return new_parts
 
 
@@ -161,15 +162,18 @@ if __name__ == "__main__":
     from parse_xml import parse
     
     parser = argparse.ArgumentParser()
-    parser.add_argument("--quiet", "-q", action="store_true", default=False)
+    parser.add_argument("--counts", "-c", action="store_true", default=False)
+    parser.add_argument("--list", "-l", action="store_true", default=False)
     parser.add_argument("musicxml_file")
 
     args = parser.parse_args()
 
     parts = parse(args.musicxml_file)
-    new_parts = unroll_parts(parts)
+    new_parts = unroll_parts(parts, args.counts)
 
-    if not args.quiet:
-        for part in new_parts:
-            part.dump()
+    if args.list:
+        for info, measures in new_parts:
+            print("part", info.id)
+            for measure in measures:
+                print(measure.number)
             print()
