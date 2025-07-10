@@ -45,7 +45,7 @@ class assign_measure:
                  trace_no_print=False):
         self.trace = trace
         self.measure = measure
-        self.number = measure.number
+        self.number = str(measure.number)
         self.measure.index = index
         self.time_modifications = time_modifications
         self.skip_no_print = skip_no_print
@@ -90,6 +90,15 @@ class assign_measure:
         if self.longest != Divisions_per_measure:
             print(f"Measure {self.number} has incorrect length.  "
                   f"Got {self.longest}, expected {Divisions_per_measure}")
+        sorted_notes = [child for child in self.measure.children
+                               if child.name == 'note' and not child.ignore]
+        sorted_notes.sort(key=lambda note: (note.start, -note.midi_note))
+        self.measure.sorted_notes = sorted_notes
+        if self.number == self.trace:
+            print(f"measure({self.number}) sorted_notes:")
+            for note in sorted_notes:
+                print(f"  note {note.note}, voice={note.voice}, start={note.start}, "
+                      f"duration={note.duration}, tie={note.tie}")
 
     def assign_divisions(self, divisions):
         global Divisions
@@ -149,28 +158,32 @@ class assign_measure:
                 return
         if note.rest:
             if self.number == self.trace:
-                print(f"rest start={self.start}, duration={note.duration}{print_object}")
+                print(f"rest voice={note.voice}, start={self.start}, "
+                      f"duration={note.duration}{print_object}")
             self.inc_start(note.duration)
             note.ignore = True
             return
         if note.cue:
             if self.number == self.trace:
-                print(f"Got cue note {note.note} in measure {self.number}{print_object}")
+                print(f"Got cue note {note.note}, voice={note.voice} "
+                      f"in measure {self.number}{print_object}")
             note.ignore = True
             return
         note.start = self.start
         if note.chord:
             if self.number == self.trace:
-                print(f"note {note.note} chord start={self.start}, "
+                print(f"note {note.note} chord, voice={note.voice}, start={note.start}, "
                       f"duration={note.duration} doesn't count{print_object}")
         elif note.grace:
             if self.number == self.trace:
-                print(f"note {note.note} grace start={self.start}, no duration{print_object}")
+                print(f"note {note.note} grace, voice={note.voice}, start={note.start}, "
+                      f"no duration{print_object}")
         else:
             duration = note.duration
             if note.time_modification is None:
                 if self.number == self.trace:
-                    print(f"note {note.note} start={self.start}, duration={duration}{print_object}")
+                    print(f"note {note.note}, voice={note.voice}, start={note.start}, "
+                          f"duration={duration}{print_object}")
             else:
                 actual_notes = note.time_modification.actual_notes
                 normal_notes = note.time_modification.normal_notes
@@ -184,7 +197,8 @@ class assign_measure:
                           f"in measure {self.number}, {duration=}, {actual_duration=}")
                 duration = actual_duration
                 if self.number == self.trace:
-                    print(f"note {note.note} {note.type} tuplet({normal_notes}/{actual_notes}) "
+                    print(f"note {note.note} {note.type}, voice={note.voice}, "
+                          f"tuplet({normal_notes}/{actual_notes}) "
                           f"start={self.start}, duration={duration}{print_object}")
             self.inc_start(duration)
 
@@ -211,7 +225,7 @@ if __name__ == "__main__":
     from unroll_repeats import unroll_parts
     
     parser = argparse.ArgumentParser()
-    parser.add_argument("--trace", "-m", metavar="MEASURE", type=int, default=None)
+    parser.add_argument("--trace", "-m", metavar="MEASURE", default=None)
     parser.add_argument("--no-skip-no-print", "-S", action="store_false", default=True)
     parser.add_argument("--trace-no-print", "-n", action="store_true", default=False)
     parser.add_argument("--time-modifications", "-t", action="store_true", default=False)
