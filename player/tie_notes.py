@@ -4,12 +4,9 @@
 def tie_notes(measures, trace_measure=None, trace=False):
     first_notes = {}
     for measure in measures:
-        sorted_notes = [child for child in measure.children if child.name == 'note' and not child.ignore]
-        sorted_notes.sort(key=lambda note: (note.start, -note.midi_note))
-        measure.sorted_notes = sorted_notes
         if str(measure.number) == trace_measure:
             print(f"measure {measure.number}:")
-        for note in sorted_notes:
+        for note in measure.sorted_notes:
             if str(measure.number) == trace_measure:
                 print(f"  note {note.note} start={note.start}, duration={note.duration}, tie={note.tie}")
             tie_note(measure.number, note, first_notes, trace)
@@ -48,13 +45,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--trace", "-t", action="store_true", default=False)
     parser.add_argument("--measure", "-m", default=None)
-    parser.add_argument("--no-skip-no-print", "-S", action="store_false", default=True)
     parser.add_argument("musicxml_file")
 
     args = parser.parse_args()
 
     parts = parse(args.musicxml_file)
     new_parts = unroll_parts(parts)
-    assign_parts(new_parts, skip_no_print=args.no_skip_no_print)
+    assign_parts(new_parts)
     tie_parts(new_parts, args.measure, args.trace)
 

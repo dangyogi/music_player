@@ -8,6 +8,8 @@ XML_changed = False
 Divisions = None  # divisions per quarter note
 Time = None
 Divisions_per_measure = None
+Fix_backup_rest = False
+Show_measures = []
 
 def fix_measure(measure):
     global Divisions, Time, Divisions_per_measure
@@ -44,7 +46,7 @@ def fix_children(measure, children, trace=1):
     measure_num = int(measure.attrib['number'])
     #print(f"got measure {measure_num} with {len(children)} children")
     voices, errors, changes = collect_voices(measure, children)
-    if errors or changes:
+    if errors or changes or measure_num in Show_measures:
         print_voices(measure_num, voices)
     return errors, changes
 
@@ -86,6 +88,8 @@ def print_elem(measure_num, elem):
                 print("got AssertionError, measure", measure_num)
                 ET.dump(elem)
                 raise
+        if elem.find('cue') is not None:
+            note += ' cue'
         if elem.find('grace') is not None:
             note += ' grace'
         if elem.find('chord') is not None:
@@ -110,15 +114,15 @@ def collect_voices(measure, children):
     voice = []
     voice_num = None
     duration = 0
+    max_duration = 0
     elements_to_remove = []
     for child in children:
         if child.tag == 'note':
             new_voice = int(find1(child, 'voice').text)
             if voice_num is not None and new_voice != voice_num:
                 if voice:
-                    if duration != Divisions_per_measure:
-                        print(f"Measure {measure_num}, voice {voice_num}, incorrect dur {duration}")
-                        errors += 1
+                    if duration > max_duration:
+                        max_duration = duration
                     voices.append((voice_num, voice, duration))
                     voice = []
             voice_num = new_voice
@@ -126,9 +130,8 @@ def collect_voices(measure, children):
                 duration += get_duration(child)
         elif child.tag == 'backup':
             if voice:
-                if duration != Divisions_per_measure:
-                    print(f"Measure {measure_num}, voice {voice_num}, incorrect dur {duration}")
-                    errors += 1
+                if duration > max_duration:
+                    max_duration = duration
                 voices.append((voice_num, voice, duration))
                 voice = []
             voice_num = None
@@ -157,7 +160,8 @@ def collect_voices(measure, children):
         else:
             raise AssertionError(f"Measure {measure_num} got unknown tag {child.tag}")
         if voice and voice[-1].tag == 'backup' \
-           and child.tag == 'note' and child.find('rest') is not None and not get_print(child):
+           and child.tag == 'note' and child.find('rest') is not None and not get_print(child) and \
+           Fix_backup_rest:
             rest_dur = get_duration(child)
             print(f"Deleting non-printing rest after backup in measure {measure_num}")
             elements_to_remove.append(child)
@@ -170,10 +174,12 @@ def collect_voices(measure, children):
         else:
             voice.append(child)
     if voice:
-        if duration != Divisions_per_measure:
-            print(f"Measure {measure_num}, voice {voice_num}, incorrect dur {duration}")
-            errors += 1
+        if duration > max_duration:
+            max_duration = duration
         voices.append((voice_num, voice, duration))
+    if max_duration != Divisions_per_measure:
+        print(f"Measure {measure_num} incorrect dur {max_duration}")
+        errors += 1
     if elements_to_remove:
         XML_changed = True
         for element in elements_to_remove:
@@ -224,9 +230,13 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser()
+    parser.add_argument("--show", "-s")
     parser.add_argument("--no-write", "-w", action="store_true", default=False)
+    parser.add_argument("--fix-backup-rest", "-b", action="store_true", default=False)
     parser.add_argument("score_xmlfile")
 
     args = parser.parse_args()
+    Fix_backup_rest = args.fix_backup_rest
+    Show_measures = [int(n) for n in args.show.split(',')]
 
     parse(args.score_xmlfile, args.no_write)

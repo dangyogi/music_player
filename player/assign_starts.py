@@ -36,25 +36,36 @@ Note_fraction = {  # the ratio of each note type to a quarter note
    '256th': Fraction(1, 64),
 }
 
+Measure_start = 0
+
 class assign_measure:
     r'''Acts like a function, but provides a bucket for measure-level variables.
 
     All methods are only used by __init__.
+
+    Assigns the following to measure:
+        index - 0 relative index into measures
+        sorted_notes - notes sorted by ascending start, decending midi_note
+        divisions - brought out in the measure declaring attributes.divisions
+        time - brought out in the measure declaring attributes.time
+        division_per_measure - brought out in the measure declaring both divisions and time
+        start - start of measure in divisions from the start of the part.
+        duration - duration of measure (greatest note stop time)
     '''
-    def __init__(self, measure, index, time_modifications=False, trace=None, skip_no_print=True,
-                 trace_no_print=False):
+    def __init__(self, measure, index, time_modifications=False, trace=None, trace_no_print=False):
         self.trace = trace
         self.measure = measure
         self.number = str(measure.number)
         self.measure.index = index
         self.time_modifications = time_modifications
-        self.skip_no_print = skip_no_print
         self.trace_no_print = trace_no_print
         if self.number == self.trace:
             print("measure", self.number)
         self.process_children()
 
     def process_children(self):
+        global Measure_start
+        self.measure.start = Measure_start
         self.start = 0
         self.longest = 0
         self.backup_num = 0
@@ -90,6 +101,8 @@ class assign_measure:
         if self.longest != Divisions_per_measure:
             print(f"Measure {self.number} has incorrect length.  "
                   f"Got {self.longest}, expected {Divisions_per_measure}")
+        self.measure.duration = self.longest
+        Measure_start += self.measure.duration
         sorted_notes = [child for child in self.measure.children
                                if child.name == 'note' and not child.ignore]
         sorted_notes.sort(key=lambda note: (note.start, -note.midi_note))
@@ -99,6 +112,7 @@ class assign_measure:
             for note in sorted_notes:
                 print(f"  note {note.note}, voice={note.voice}, start={note.start}, "
                       f"duration={note.duration}, tie={note.tie}")
+        return 
 
     def assign_divisions(self, divisions):
         global Divisions
@@ -153,9 +167,8 @@ class assign_measure:
                     print("got note", note.note, "with print-object", note.print_object,
                           "in measure", self.number)
             print_object = f" print_object={note.print_object}"
-            if note.print_object == 'no' and self.skip_no_print:
+            if note.print_object == 'no':
                 note.ignore = True
-                return
         if note.rest:
             if self.number == self.trace:
                 print(f"rest voice={note.voice}, start={self.start}, "
@@ -210,12 +223,17 @@ class assign_measure:
             self.longest = self.start
 
 
-def assign_parts(parts, time_modification=False, trace=None, skip_no_print=True, trace_no_print=False):
-    global Divisions, Time, Divisions_per_measure
-    for _, measures in parts:
+def assign_parts(parts, time_modification=False, trace=None, trace_no_print=False):
+    global Divisions, Time, Divisions_per_measure, Measure_start
+    for info, measures in parts:
         Divisions = Time = Divisions_per_measure = None
+        Measure_start = 0
         for i, measure in enumerate(measures):
-            assign_measure(measure, i, time_modification, trace, skip_no_print, trace_no_print)
+            assign_measure(measure, i, time_modification, trace, trace_no_print)
+        part_duration = Measure_start / Divisions  # in beats (quarter notes)
+        expected_duration = (i + 1) * Divisions_per_measure / Divisions
+        print(f"Part {info.id}, {i + 1} measures, duration {part_duration} beats (quarter notes) -- "
+              f"expected {expected_duration}")
 
 
 
@@ -226,7 +244,6 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--trace", "-m", metavar="MEASURE", default=None)
-    parser.add_argument("--no-skip-no-print", "-S", action="store_false", default=True)
     parser.add_argument("--trace-no-print", "-n", action="store_true", default=False)
     parser.add_argument("--time-modifications", "-t", action="store_true", default=False)
     parser.add_argument("musicxml_file")
@@ -235,6 +252,5 @@ if __name__ == "__main__":
 
     parts = parse(args.musicxml_file)
     new_parts = unroll_parts(parts)
-    assign_parts(new_parts, args.time_modifications, args.trace, args.no_skip_no_print,
-                 args.trace_no_print)
+    assign_parts(new_parts, args.time_modifications, args.trace, args.trace_no_print)
 

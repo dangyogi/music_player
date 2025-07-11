@@ -57,7 +57,7 @@ class Parser:
         self.name = name
         self.list = list
         self.one_child = one_child
-        self.package_fn = package_fn  # passed: tag, dict of values
+        self.package_fn = package_fn  # passed: tag, dict of values; returns prop_name, value
         self.ignore = frozenset(ignore)
         self.save = frozenset(save)
         self.children = {child.name: child for child in children}
@@ -70,6 +70,8 @@ class Parser:
             print("  lists", self.lists)
 
     def parse(self, e):
+        r'''Returns prop_name, value.
+        '''
         properties = {}
         def save(name, prop_name, value, msg):
             nonlocal properties, child_num
@@ -262,7 +264,7 @@ def sound(name, prop):
         return 'volume', value
     return key, value
 
-# tempo: value or volume: value, you'll never see 'sound'!
+# tempo: value (bpm i.e., quarter notes/min); or volume: value, you'll never see 'sound'!
 Sound = Parser("sound", sound,
                save="attr-tempo attr-dynamics".split())
 
