@@ -1,15 +1,22 @@
 # midi_spy.py
 
+import time
 import selectors
+from collections import Counter
 
 from alsa_midi import SequencerClient, PortCaps, EventType, SYSTEM_TIMER, SYSTEM_ANNOUNCE, ALSAError
 
 Sel = selectors.DefaultSelector()
 
+Last_clock = 0
+Err_counts = Counter()
+
 def get_midi_events():
     # w/false, often 0, but there's still an event.
     # w/True, always at least 1, but often more
     #start_time = time.time()
+    global Last_clock, Err_counts
+
     num_pending = client.event_input_pending(True)
     #pending_time = time.time()
     #print("pending", pending_time - start_time)
@@ -17,36 +24,58 @@ def get_midi_events():
     for i in range(1, num_pending + 1):
         #print("reading", i)
         event = client.event_input()
-        #input_time = time.time()
-        #print("input", input_time - pending_time)
-        print("source", event.source, event,
-              "queue_id", event.queue_id, "tick", event.tick, "time", event.time)
-        if event.type == EventType.PORT_START:
-            #print(dir(event))
-            #
-            # addr
-            # dest
-            # flags
-            # length
-            # queue_id
-            # raw_data
-            # relative
-            # source
-            # tag
-            # tick
-            # time
-            # type
-            #print(f"{event.addr=}, {event.dest=}, {event.flags=}, {event.relative=}, {event.source=}")
-            #print(f"{event.tag=}, {event.tick=}, {event.time=}, {event.type=}")
-            print(f"{event.addr=}, {event.flags=}")
-            connect_from(event.addr)
+        if event.type == EventType.CLOCK:
+            now = time.clock_gettime(time.CLOCK_MONOTONIC)
+            if Last_clock:
+                err = round(now - Last_clock - 0.01, 4)
+                if err < 0.0:
+                    #print(f"Got clock period err < 0, {err=}")
+                    err = -err
+                Err_counts[err] += 1
+            Last_clock = now
+        else:
+            if Last_clock:
+                for err, count in sorted(Err_counts.items()):
+                    print(f"  {err}: {count}")
+                Last_clock = 0
+                Err_counts = Counter()
+            #input_time = time.time()
+            #print("input", input_time - pending_time)
+            print("source", event.source, event,
+                  "tag", event.tag,
+                  "queue_id", event.queue_id, "tick", event.tick, "time", event.time)
+            if event.type == EventType.PORT_START:
+                #print(dir(event))
+                #
+                # addr
+                # dest
+                # flags
+                # length
+                # queue_id
+                # raw_data
+                # relative
+                # source
+                # tag
+                # tick
+                # time
+                # type
+                #print(f"{event.addr=}, {event.dest=}, {event.flags=}, {event.relative=}, {event.source=}")
+                #print(f"{event.tag=}, {event.tick=}, {event.time=}, {event.type=}")
+                #print(f"{event.addr=}, {event.flags=}")
+                connect_from(event.addr)
 
 def connect_from(addr):
-    print(">>>>>>>>>>> connect_from", addr)
-    try:
-        port.connect_from(addr)
-    except ALSAError as e:
-        print("Got error, not connected")
+    client_info = client.get_client_info(addr.client_id)
+    port_info = client.get_port_info(addr)
+    name = f"{client_info.name}({addr.client_id}):{port_info.name}({addr.port_id})"
+    cap = port_info.capability
+    #print(f"connect_from {name}, {cap=}")
+    if (cap & PortCaps.READ) and (cap & PortCaps.SUBS_READ):
+        print(">>>>>>>>>>> connecting from", name)
+        try:
+            port.connect_from(addr)
+        except ALSAError as e:
+            print("Got error, not connected")
 
 def register_read(file, read_fn):
     Sel.register(file, selectors.EVENT_READ, read_fn)
@@ -59,7 +88,7 @@ def wait(time=None):
 #print(help(EventType))
 
 client = SequencerClient("midi_spy")
-print(f"{client.client_id=}")
+print(f"midi_spy client_id={client.client_id}")
 #print(f"{client.get_client_info()=}")
 #print(f"{client.get_client_pool()=}")
 

@@ -1,0 +1,8 @@
+Need:
+    
+    - alsa_midi layer
+    - queue/clock/pause
+    - received CC processing
+    - CC recording/replay (based on midi beat time) (midi file?)
+    - note output
+

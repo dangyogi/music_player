@@ -217,7 +217,7 @@ class assign_measure:
 
     def inc_start(self, amount):
         self.start += amount
-        if isinstance(self.start, Fraction) and self.start.denominator == 1:
+        if self.start.denominator == 1:  # ints have a numerator and denominator too!
             self.start = self.start.numerator
         if self.start > self.longest:
             self.longest = self.start
