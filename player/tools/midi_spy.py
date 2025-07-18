@@ -17,13 +17,13 @@ def get_midi_events():
     #start_time = time.time()
     global Last_clock, Err_counts
 
-    num_pending = client.event_input_pending(True)
+    num_pending = Client.event_input_pending(True)
     #pending_time = time.time()
     #print("pending", pending_time - start_time)
     #print(f"midi_spy.get_midi_events, {num_pending=}")
     for i in range(1, num_pending + 1):
         #print("reading", i)
-        event = client.event_input()
+        event = Client.event_input()
         if event.type == EventType.CLOCK:
             now = time.clock_gettime(time.CLOCK_MONOTONIC)
             if Last_clock:
@@ -65,15 +65,15 @@ def get_midi_events():
                 connect_from(event.addr)
 
 def connect_from(addr):
-    client_info = client.get_client_info(addr.client_id)
-    port_info = client.get_port_info(addr)
+    client_info = Client.get_client_info(addr.client_id)
+    port_info = Client.get_port_info(addr)
     name = f"{client_info.name}({addr.client_id}):{port_info.name}({addr.port_id})"
     cap = port_info.capability
     #print(f"connect_from {name}, {cap=}")
     if (cap & PortCaps.READ) and (cap & PortCaps.SUBS_READ):
         print(">>>>>>>>>>> connecting from", name)
         try:
-            port.connect_from(addr)
+            Port.connect_from(addr)
         except ALSAError as e:
             print("Got error, not connected")
 
@@ -87,12 +87,12 @@ def wait(time=None):
 #print(dir(EventType))
 #print(help(EventType))
 
-client = SequencerClient("midi_spy")
-print(f"midi_spy client_id={client.client_id}")
-#print(f"{client.get_client_info()=}")
-#print(f"{client.get_client_pool()=}")
+Client = SequencerClient("midi_spy")
+print(f"midi_spy client_id={Client.client_id}")
+#print(f"{Client.get_client_info()=}")
+#print(f"{Client.get_client_pool()=}")
 
-#print(dir(client))
+#print(dir(Client))
 #
 # client_id
 # create_queue
@@ -109,58 +109,62 @@ print(f"midi_spy client_id={client.client_id}")
 # query_named_queue
 # set_client_info
 
-register_read(client._fd, get_midi_events)
+register_read(Client._fd, get_midi_events)
 
-port = None
-queue = None
+Port = None
 
-try:
-    port = client.create_port("notes", PortCaps.WRITE | PortCaps.SUBS_WRITE)  # FIX: close?
-    connect_from(SYSTEM_ANNOUNCE)
-    connect_from(SYSTEM_TIMER)
-    for x in client.list_ports():
-        if x.client_id != client.client_id:
-            connect_from(x)
+def run():
+    global Port
+    try:
+        Port = Client.create_port("notes", PortCaps.WRITE | PortCaps.SUBS_WRITE)  # FIX: close?
+        connect_from(SYSTEM_ANNOUNCE)
+        connect_from(SYSTEM_TIMER)
+        for x in Client.list_ports():
+            if x.client_id != Client.client_id:
+                connect_from(x)
 
-    # print(dir(port))
-    #
-    # client
-    # client_id
-    # close
-    # connect_from
-    # connect_to
-    # disconnect_from
-    # disconnect_to
-    # get_info
-    # list_subscribers
-    # port_id
-    # set_info
+        # print(dir(Port))
+        #
+        # client
+        # client_id
+        # close
+        # connect_from
+        # connect_to
+        # disconnect_from
+        # disconnect_to
+        # get_info
+        # list_subscribers
+        # port_id
+        # set_info
 
-    # print(f"{dir(port.get_info())=}")
-    #
-    # capability
-    # client_id
-    # client_name
-    # midi_channels
-    # midi_voices
-    # name
-    # port_id
-    # port_specified
-    # read_use
-    # synth_voices
-    # timestamp_queue_id
-    # timestamp_real
-    # timestamping
-    # type
-    # write_use
+        # print(f"{dir(Port.get_info())=}")
+        #
+        # capability
+        # client_id
+        # client_name
+        # midi_channels
+        # midi_voices
+        # name
+        # port_id
+        # port_specified
+        # read_use
+        # synth_voices
+        # timestamp_queue_id
+        # timestamp_real
+        # timestamping
+        # type
+        # write_use
 
-    while True:
-        wait()
+        while True:
+            wait()
 
-finally:
-    Sel.close()
-    if port is not None:
-        port.close()
-    if queue is not None:
-        queue.close()
-    client.close()
+    finally:
+        Sel.close()
+        if Port is not None:
+            Port.close()
+        Client.close()
+
+
+
+if __name__ == "__main__":
+    run()

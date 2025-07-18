@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+packages = ["player"]
+
+[project]
+name = "music_player"
+version = "0.0.1"
+readme = "README.md"
+#license = "MIT"
+#license-file = ["LICENSE"]
+requires-python = ">=3.8"
+dependencies = ["alsa-midi>=1.0.2"]
+
+[project.urls]
+repository = "https://github.com/dangyogi/music_player.git"
+
+[project.scripts]
+clock-master = "player.clock_master:run"
+midi-spy = "player.tools.midi_spy:run"
+alsa-timer = "player.tools.alsa_timer:run"
+xml-structure = "player.tools.xml_structure:script"

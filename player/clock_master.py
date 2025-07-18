@@ -49,7 +49,7 @@ Beat clock master:
 import math
 import time
 
-from midi_utils import (
+from .tools.midi_utils import (
     midi_init, midi_close,
     midi_create_queue, midi_create_output_port, midi_create_input_port, midi_create_port,
     midi_process_fn, midi_send_event, midi_drain_output, midi_pause,

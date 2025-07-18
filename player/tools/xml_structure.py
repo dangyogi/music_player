@@ -33,23 +33,23 @@ def run(filename):
         load_tags(root)
 
         def dump(tag, indent=0):
-            ans = 1
-            if tag in attributes and attributes[tag]:
-                print(' ' * indent, f"{tag}{tuple(sorted(attributes[tag]))}: {count[tag]}", sep='')
+            if tag in seen:
+                print(' ' * indent, '*', tag, sep='', end='')
             else:
-                print(' ' * indent, f"{tag}: {count[tag]}", sep='')
+                print(' ' * indent, tag, sep='', end='')
+                seen.add(tag)
+            if tag in attributes and attributes[tag]:
+                print(f"{tuple(sorted(attributes[tag]))}", end='')
+            print(f": {count[tag]}")
             if tag in tags and tags[tag]:
                 for child in sorted(tags[tag]):
-                    ans += dump(child, indent + 2)
-            return ans
-        num_tags = dump(root.tag)
-        assert num_tags == len(tags), f"{num_tags=} != {len(tags)=}"
-        assert num_tags == len(attributes), f"{num_tags=} != {len(attributes)=}"
-        assert num_tags == len(count), f"{num_tags=} != {len(count)=}"
+                    dump(child, indent + 2)
+        seen = set()
+        dump(root.tag)
+        assert len(seen) == len(attributes), f"{len(seen)=} != {len(attributes)=}"
+        assert len(seen) == len(count), f"{len(seen)=} != {len(count)=}"
 
-
-
-if __name__ == "__main__":
+def script():
     import argparse
     
     parser = argparse.ArgumentParser()
@@ -58,3 +58,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     run(args.musicxml_file)
+
+
+if __name__ == "__main__":
+    script()
