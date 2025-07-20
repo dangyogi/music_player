@@ -18,5 +18,5 @@ repository = "https://github.com/dangyogi/music_player.git"
 [project.scripts]
 clock-master = "player.clock_master:run"
 midi-spy = "player.tools.midi_spy:run"
-alsa-timer = "player.tools.alsa_timer:run"
+alsa-test = "player.tools.alsa_test:run"
 xml-structure = "player.tools.xml_structure:script"
