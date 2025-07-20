@@ -15,7 +15,7 @@ Utility:
 
 Initialization:
 
-    midi_init(client_name, streams=DUPLEX) -> None
+    midi_init(client_name, streams=DUPLEX) -> client
     midi_create_queue(name, ppq, info=None, default=True) -> Queue (only used by clock_master)
     midi_create_input_port(name, caps=READ_PORT, type=DEFAULT_PORT_TYPE, connect_from=None)
       -> Port (generally not needed)
@@ -28,6 +28,12 @@ Initialization:
     midi_create_port(name, caps=RW_PORT, type=DEFAULT_PORT_TYPE, default=True, clock_master=False,
                      connect_from=None, connect_to=None):
       -> Port (generally not needed)
+    midi_connect_to(port, addr) -> None
+    midi_connect_from(port, addr) -> None
+    midi_list_ports() -> List[PortInfo]
+    midi_get_client_info(client_id=None) -> ClientInfo (.name and .client_id useful)
+    midi_get_port_info(addr) -> PortInfo (.name, .client_id, .port_id and .capability useful)
+    midi_get_address(addr) -> "client_name(client_id):port_name(port_id)", addr may be PortInfo
     midi_address(address) -> Address or None, client_name:port_name may be used
     midi_process_fn(fn) -> None, fn(event) -> bool to drain_output
     midi_close() -> None, closes tag with clock-master, all ports, queues and client
@@ -35,7 +41,7 @@ Initialization:
 I/O:
     midi_send_event(event, queue=None, port=None, dest=None, drain_output=False) -> None
     midi_drain_output() -> None
-    midi_pause(secs) -> None, reads and processes events while paused
+    midi_pause(secs=None) -> None, reads and processes events while paused
     midi_process_clock(event) -> True if event was a clock event
                                  (Clock, Start, Stop, Continue, tempo, time_signature, spp)
                                  no drain_output required on any of these (i.e., if True returned)
@@ -61,6 +67,8 @@ import selectors
 from alsa_midi import (
    SequencerClient, Port, PortInfo, PortCaps, READ_PORT, WRITE_PORT, RW_PORT,
    PortType,
+
+   SYSTEM_TIMER, SYSTEM_ANNOUNCE,
 
    ALSAError,
 
@@ -97,9 +105,6 @@ Clock_master_channel = 15
 Clock_master_CC_ppq = 44          # ppq_data = ppq // 24
 Clock_master_CC_close_queue = 45  # tag
 Clock_master_tag = None
-
-System_timer = Address(0, 0)
-
 
 
 Sel = None
@@ -175,6 +180,8 @@ def midi_init(client_name, streams=StreamOpenType.DUPLEX):
         #                                           must be NONBLOCK
         # sequencer_name (default "default"), special meaning to ALSA, usually want "default"
     print(f"{Client.client_id=}")     # client_ids are globally unique
+    return Client
+
     #print(f"{Client.get_client_info()=}")
     #print(f"{Client.get_client_pool()=}")
 
@@ -258,6 +265,61 @@ def midi_create_queue(name, ppq, info=None, default=True):
     # owner
     # queue_id
 
+def midi_connect_to(port, addr):
+    r'''Returns True if successful.
+    '''
+    if isinstance(port, str):
+        if port not in Ports:
+            print("midi_connect_to: unknown port", port)
+            return False
+        port = Ports[port]
+    address = midi_address(addr)
+    if address is None:
+        return False
+    try:
+        port.connect_to(address)
+    except ALSAError:
+        return False
+    return True
+
+def midi_connect_from(port, addr):
+    r'''Returns True if successful.
+    '''
+    if isinstance(port, str):
+        if port not in Ports:
+            print("midi_connect_from: unknown port", port)
+            return False
+        port = Ports[port]
+    address = midi_address(addr)
+    if address is None:
+        return False
+    try:
+        port.connect_from(address)
+    except ALSAError:
+        return False
+    return True
+
+def midi_list_ports():
+    return Client.list_ports()
+
+def midi_get_client_info(client_id=None):
+    r'''Returns ALSA ClientInfo.
+    '''
+    if client_id is None:
+        return Client.get_client_info()
+    return Client.get_client_info(client_id)
+
+def midi_get_port_info(addr):
+    if isinstance(addr, PortInfo):
+        return addr
+    return Client.get_port_info(midi_address(addr))
+
+def midi_get_address(addr):
+    r'''Returns "client_name(client_id):port_name(port_id)"
+    '''
+    port_info = midi_get_port_info(addr)
+    client_info = midi_get_client_info(port_info.client_id)
+    return f"{client_info.name}({client_info.client_id}):{port_info.name}({port_info.port_id})"
 
 def midi_create_input_port(name, caps=WRITE_PORT, type=DEFAULT_PORT_TYPE, connect_from=None):
     return midi_create_port(name, caps, type, connect_from=connect_from)
@@ -300,27 +362,19 @@ def midi_create_port(name, caps=RW_PORT, type=DEFAULT_PORT_TYPE, default=True, c
         if Clock_master_tag is not None and Ppq is not None:
             midi_send_ppq()
     if connect_from:
-        for addr in connect_from.split(','):
-            address = midi_address(addr.strip())
-            if address is not None:
-                try:
-                    port.connect_from(address)
-                except ALSAError:
-                    continue
-                break
-        else:
-            print(f"port({name}): all connect_from addresses failed")
+        connections = 0
+        for addr in connect_from:
+            if midi_connect_from(port, addr):
+                connections += 1
+        if connections != len(connect_from):
+            print(f"port({name}): {len(connect_from) - connections} connect_from addresses failed")
     if connect_to:
-        for addr in connect_to.split(','):
-            address = midi_address(addr.strip())
-            if address is not None:
-                try:
-                    port.connect_to(address)
-                except ALSAError:
-                    continue
-                break
-        else:
-            print(f"port({name}): all connect_to addresses failed")
+        connections = 0
+        for addr in connect_to:
+            if midi_connect_to(port, addr):
+                connections += 1
+        if connections != len(connect_to):
+            print(f"port({name}): {len(connect_to) - connections} connect_to addresses failed")
     return port
 
     #help(Client.create_port)
@@ -456,7 +510,7 @@ def midi_pause(secs=None):
         num_pending = Client.event_input_pending(True)
         for i in range(1, num_pending + 1):
             #print("reading", i)
-            event = client.event_input()
+            event = Client.event_input()
             if sk.data(event):
                 drain_output = True
     if drain_output:
@@ -623,6 +677,8 @@ def midi_tick_time():
 def midi_close():
     if Clock_master_tag is not None and Ppq is not None and Clock_master_port is not None:
         midi_close_queue()
+    if Sel is not None:
+        Sel.close()
     for port in Ports.values():
         port.close()
     for queue in Queues.values():

@@ -87,7 +87,7 @@ def clock_test(secs):  # works
 
 def timer_test(tick):
     print("timer_test", tick)
-    #midi_send_event(ClockEvent(dest=System_timer, tick=tick, tag=17), drain_output=True) # doesn't work
+    #midi_send_event(ClockEvent(dest=SYSTEM_TIMER, tick=tick, tag=17), drain_output=True) # doesn't work
     midi_send_event(ClockEvent(tick=tick, tag=17), drain_output=True)  # works
 
 def send_notes():
