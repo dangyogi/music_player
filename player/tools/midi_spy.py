@@ -24,7 +24,7 @@ def get_midi_events():
     for i in range(1, num_pending + 1):
         #print("reading", i)
         event = Client.event_input()
-        if event.type == EventType.CLOCK:
+        if event.type == EventType.CLOCK and event.tag == 0:
             now = time.clock_gettime(time.CLOCK_MONOTONIC)
             if Last_clock:
                 err = round(now - Last_clock - 0.01, 4)

@@ -30,7 +30,7 @@ Initialization:
       -> Port (generally not needed)
     midi_address(address) -> Address or None, client_name:port_name may be used
     midi_process_fn(fn) -> None, fn(event) -> bool to drain_output
-    midi_close() -> None, closes all ports, queues and client
+    midi_close() -> None, closes tag with clock-master, all ports, queues and client
 
 I/O:
     midi_send_event(event, queue=None, port=None, dest=None, drain_output=False) -> None
@@ -42,8 +42,9 @@ I/O:
 
 To interface with the clock-master:
 
-    midi_set_tag(tag) -> None, unique identifier for clock_master
-    midi_set_ppq(ppq) -> None, sends message to clock-master
+    midi_set_tag(tag) -> None, unique identifier for clock-master
+    midi_set_ppq(ppq) -> None, sends CC_ppq to clock-master to create a queue
+    midi_close_queue() -> None, sends CC_close_queue to clock-master to close the queue
     midi_set_tempo(bpm) -> None, sends message to clock-master to set tempo on all queues
     midi_set_time_signature(beats, beat_type) -> None, sends message to clock-master
     midi_start() -> None, sends message to clock-master
@@ -64,8 +65,10 @@ from alsa_midi import (
    ALSAError,
 
    EventType, Address,
+   NoteOnEvent, NoteOffEvent, KeyPressureEvent, ProgramChangeEvent, ChannelPressureEvent,
+   PitchBendEvent, NonRegisteredParameterChangeEvent, RegisteredParameterChangeEvent,
    SetQueueTempoEvent, SongPositionPointerEvent, ControlChangeEvent, SystemEvent,
-   TimeSignatureEvent, StartEvent, ContinueEvent, StopEvent, ClockEvent,
+   TimeSignatureEvent, StartEvent, ContinueEvent, StopEvent, ClockEvent, MidiBytesEvent,
 )
 from alsa_midi.client import StreamOpenType
 from alsa_midi.port import DEFAULT_PORT_TYPE
@@ -91,7 +94,8 @@ Tempo_status = 0xF4
 Time_sig_status = 0xF5
 
 Clock_master_channel = 15
-Clock_master_ppq_param = 44  # ppq_data = ppq // 24
+Clock_master_CC_ppq = 44          # ppq_data = ppq // 24
+Clock_master_CC_close_queue = 45  # tag
 Clock_master_tag = None
 
 System_timer = Address(0, 0)
@@ -293,6 +297,8 @@ def midi_create_port(name, caps=RW_PORT, type=DEFAULT_PORT_TYPE, default=True, c
         Default_port = port
     if clock_master:
         Clock_master_port = port
+        if Clock_master_tag is not None and Ppq is not None:
+            midi_send_ppq()
     if connect_from:
         for addr in connect_from.split(','):
             address = midi_address(addr.strip())
@@ -510,6 +516,8 @@ def midi_process_clock(event):
 def midi_set_tag(tag):
     global Clock_master_tag
     Clock_master_tag = tag
+    if Clock_master_port is not None and Ppq is not None:
+        midi_send_ppq()
 
 def midi_set_ppq(ppq):
     r'''Sends message to clock-master.
@@ -517,23 +525,30 @@ def midi_set_ppq(ppq):
     global Ppq, Ppc
     Ppq = ppq
     Ppc = ppq // 24  # pulses per CLOCK pulse
-    if Clock_master_port:
-        Client.event_output(
-          ControlChangeEvent(Clock_master_channel, Clock_master_ppq_param, ppq_to_data(ppq),
-                             tag=Clock_master_tag),
-          port=Clock_master_port)
-        drain_output()
+    if Clock_master_port is not None and Clock_master_tag is not None:
+        midi_send_ppq()
+
+def midi_send_ppq():
+    Client.event_output(
+      ControlChangeEvent(Clock_master_channel, Clock_master_CC_ppq, ppq_to_data(Ppq),
+                         tag=Clock_master_tag),
+      port=Clock_master_port)
+    Client.drain_output()
+
+def midi_close_queue():
+    Client.event_output(
+      ControlChangeEvent(Clock_master_channel, Clock_master_CC_close_queue, Clock_master_tag,
+                         tag=Clock_master_tag),
+      port=Clock_master_port)
+    Client.drain_output()
 
 def midi_set_tempo(bpm):
-    global Bpm, Tick_interval
     print(f"midi_set_tempo: {bpm=}")
     if Clock_master_port:
         Client.event_output(SystemEvent(Tempo_status, bpm_to_data(bpm), tag=Clock_master_tag),
                             port=Clock_master_port)
-        drain_output()
+        Client.drain_output()
     else:
-        Bpm = bpm
-        Tick_interval = 60.0 / (bpm * Ppq)  # in secs
         for queue in Queues.values():
             queue.set_tempo(bpm=bpm, ppq=queue.ppq_setting)
 
@@ -545,7 +560,7 @@ def midi_set_time_signature(beats, beat_type):
         Client.event_output(SystemEvent(Time_sig_status, time_sig_to_data(beats, beat_type),
                                         tag=Clock_master_tag),
                             port=Clock_master_port)
-        drain_output()
+        Client.drain_output()
     else:
         Time_signature = (beats, beat_type)
 
@@ -556,7 +571,7 @@ def midi_start():
     else:
         for queue in Queues.values():
             queue.start()
-    drain_output()
+    Client.drain_output()
 
 def midi_stop(tick=None):
     print("midi_stop")
@@ -564,12 +579,11 @@ def midi_stop(tick=None):
         Client.event_output(StopEvent(tag=Clock_master_tag, relative=False, tick=tick),
                             port=Clock_master_port)
     else:
-        # FIX: what about tick?
         if tick:
             print(f"midi_stop: tick ignored, effective immediately!")
         for queue in Queues.values():
             queue.stop()
-    drain_output()
+    Client.drain_output()
 
 def midi_continue():
     print("midi_continue")
@@ -578,7 +592,7 @@ def midi_continue():
     else:
         for queue in Queues.values():
             queue.continue_()
-    drain_output()
+    Client.drain_output()
 
 def midi_spp(song_position, tick=None):
     print("midi_song_position")
@@ -586,7 +600,7 @@ def midi_spp(song_position, tick=None):
         Client.event_output(SongPositionPointerEvent(0, song_position, tag=Clock_master_tag,
                                                      relative=False, tick=tick),
                             port=Clock_master_port)
-        drain_output()
+        Client.drain_output()
     else:
         Spp = song_position
         Spp_countdown = Ppq // 6
@@ -598,11 +612,17 @@ def midi_tick_time():
 
     Based on set_ppq and set_tempo since last Clock received.
     '''
-    # FIX: what to do if no clock-master?  Are there still CLOCK pulses?
-    delta_t = time.clock_gettime(time.CLOCK_MONOTONIC) - Last_clock_time
-    return Ppc * Clocks + int(round(delta_t / Tick_interval))
+    if Clock_master_port:
+        delta_t = time.clock_gettime(time.CLOCK_MONOTONIC) - Last_clock_time
+        return Ppc * Clocks + int(round(delta_t / Tick_interval))
+    if Default_queue is not None:
+        return Default_queue.get_status().tick_time
+    print(f"midi_tick_time: no default queue")
+    return 0
 
 def midi_close():
+    if Clock_master_tag is not None and Ppq is not None and Clock_master_port is not None:
+        midi_close_queue()
     for port in Ports.values():
         port.close()
     for queue in Queues.values():

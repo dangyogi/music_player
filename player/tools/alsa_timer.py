@@ -2,15 +2,7 @@
 
 import time
 
-from alsa_midi import (
-   SequencerClient, PortCaps, PortType, alsa,
-
-   EventType, Address,
-   NoteOnEvent, NoteOffEvent, SetQueueTempoEvent, SongPositionPointerEvent,
-   ControlChangeEvent, SystemEvent,
-   TimeSignatureEvent, StartEvent, ContinueEvent, StopEvent, ClockEvent,
-   MidiBytesEvent
-)
+from .midi_utils import *
 
 # Midi beat clock commands:
 #
@@ -25,235 +17,81 @@ from alsa_midi import (
 #                since the start of song.  Should not be sent while devices are in play.  Use Continue
 #                to start playing (Start resets SPP to 0).
 
-System_timer = Address(0, 0)
 
-
-# Works with queue specified here, but not in event.  Queue_id set in event by ALSA.
-# Also works with queue specified in event, but not here.  Seems to be interchangable...
-#
-# Invalid queue_id in either location raises ALSAError: Invalid argument
-#
-def send(event, queue=None, port=None):
-    if port is None:
-        port = Port
-    Client.event_output(event, queue=Queue, port=port)
-
-def drain_output():
-    Client.drain_output()
-
-
-Client = None
-Port = None
 Queue = None
+Ppq = None
 
 def init():
-    r'''Creates Client, (read) Port, (output) Timer_port.
+    r'''Creates client and output (read) port.
     '''
-    global Client, Port, Timer_port
+    midi_init("alsa-timer")
+    midi_create_output_port("output")
 
-    Client = SequencerClient("alsa_timer tool")
-    print(f"{Client.client_id=}")
-    #print(f"{Client.get_client_info()=}")
-    #print(f"{Client.get_client_pool()=}")
+def create_queue(ppq):
+    global Queue, Ppq
+    Queue = midi_create_queue("alsa-timer queue", ppq)
+    Ppq = ppq
 
-    #print(dir(Client))
-    #
-    # client_id
-    # create_queue
-    # get_client_info
-    # get_client_pool
-    # get_named_queue
-    # get_port_info
-    # get_queue
-    # get_queue_info
-    # get_queue_status
-    # get_sequencer_name
-    # get_sequencer_type
-    # get_system_info
-    # list_ports
-    # query_named_queue
-    # set_client_info
-    #help(Client.get_port_info)
+def queue_set_tempo(beats_per_minute):
+    print(f"queue_set_tempo: {beats_per_minute=}")
+    print(f"  {Queue.get_tempo()=}")
+    midi_set_tempo(beats_per_minute)
+    print(f"  {Queue.get_tempo()=}")
 
-    Port = Client.create_port("notes", PortCaps.READ | PortCaps.SUBS_READ
-                            # This isn't necessary.  Not sure what it does...
-                            # , timestamping=True, timestamp_real=False, timestamp_queue=Queue
-                             )
-    print(f"{Port.port_id=}")
-    #help(Client.create_port)
-    # type: PortType
-    # timestamping: bool
-    # timestamp_real: bool
-    # timestamp_queue: queue
-
-    # print(dir(Port))
-    #
-    # client
-    # client_id
-    # close
-    # connect_from
-    # connect_to
-    # disconnect_from
-    # disconnect_to
-    # get_info
-    # list_subscribers
-    # port_id
-    # set_info
-
-    # print(f"{dir(Port.get_info())=}")
-    #
-    # capability
-    # client_id
-    # client_name
-    # midi_channels
-    # midi_voices
-    # name
-    # port_id
-    # port_specified
-    # read_use
-    # synth_voices
-    # timestamp_queue_id
-    # timestamp_real
-    # timestamping
-    # type
-    # write_use
-    #Timer_port = Client.create_port("Timer", PortCaps.READ | PortCaps.SUBS_READ)
-    #print(f"{Timer_port.port_id=}")
-    #Timer_port.connect_to(System_timer)
-
-def create_queue():
-    global Queue
-
-    Queue = Client.create_queue("alsa_timer queue")
-    print(f"{Queue.queue_id=}")
-    #help(Client.create_queue)
-    #
-    # name
-    # info: QueueInfo: queue, name, owner, locked, flags
-
-    #print(f"{Queue.control=}")
-    #print(f"{Queue.get_info()=}")
-    #print(f"{Queue.get_status()=}")
-    #print(f"{Queue.get_tempo()=}")
-    #print(f"{Queue.get_timer()=}")
-    #print(f"{Queue.get_usage()=}")
-
-    #print(dir(Queue))
-    # 
-    # control(EventType, value=0)  # sends queue control event
-    # get_info
-    # get_status
-    # get_tempo
-    # get_timer
-    # get_usage
-    # queue_id
-    # set_info
-    # set_tempo
-    # set_timer
-    # set_usage
-    # start
-    # stop
-
-    # print(f"{dir(Queue.get_info())=}")
-    #
-    # flags
-    # locked
-    # name
-    # owner
-    # queue_id
-
-def queue_set_tempo(beats_per_minute = 60, ticks_per_quarter_note = 12):
-    print(f"queue_set_tempo: {beats_per_minute=}, {ticks_per_quarter_note=}")
-    tempo = Queue.get_tempo()
-    print(f"{tempo=}")
-    Queue.set_tempo(int(60.0 * 1e6 / beats_per_minute), ticks_per_quarter_note)
-    tempo = Queue.get_tempo()
-    print(f"{tempo=}")
-
-def queue_start(my_queue=False):
+def queue_start():
     print("queue start")
-    if my_queue:
-        Queue.start()
-    else:
-        #send(StartEvent(queue_id=alsa.SND_SEQ_QUEUE_DIRECT, dest=System_timer))
-        Client.event_output(StartEvent(7, queue_id=alsa.SND_SEQ_QUEUE_DIRECT), port=Port)
-        #send(MidiBytesEvent([0xFA], dest=System_timer))
-        #Queue.control(EventType.START)
-    drain_output()  # necessary to start immediately with either approach!!
+    midi_start()
 
 def clock():
     print("clock")
-    #send(ClockEvent(queue_id=alsa.SND_SEQ_QUEUE_DIRECT, dest=System_timer))
-    #Client.event_output(ClockEvent(dest=System_timer), port=Port)
-    #Client.event_output(ClockEvent(), port=Port)
-    Client.event_output(MidiBytesEvent([0xF8]), port=Port)
-    #Queue.control(EventType.CLOCK)
-    drain_output()  # necessary to start immediately with either approach!!
+    midi_send_event(ClockEvent(tag=17), drain_output=True)  # works
 
 def stop():
     print("stop")
-    #send(StopEvent(queue_id=alsa.SND_SEQ_QUEUE_DIRECT, dest=System_timer))
-    #Client.event_output(StopEvent(dest=System_timer), port=Port)
-    #Client.event_output(StopEvent(), port=Port)
-    Client.event_output(MidiBytesEvent([0xFC], tag=47), port=Port)
-    #Queue.control(EventType.STOP)
-    drain_output()  # necessary to start immediately with either approach!!
+    midi_send_event(StopEvent(tag=47), drain_output=True)   # works
+    #midi_send_event(MidiBytesEvent([0xFC], tag=47), drain_output=True)  # works
 
 def send_continue():
     print("send_continue")
-    #send(ContinueEvent(queue_id=alsa.SND_SEQ_QUEUE_DIRECT, dest=System_timer))
-    #Client.event_output(ContinueEvent(dest=System_timer), port=Port)
-    #Client.event_output(ContinueEvent(), port=Port)
-    Client.event_output(MidiBytesEvent([0xFB]), port=Port)
-    #Queue.control(EventType.CONTINUE)
-    drain_output()  # necessary to start immediately with either approach!!
+    midi_send_event(ContinueEvent(), drain_output=True)   # works
+    #midi_send_event(MidiBytesEvent([0xFB]), drain_output=True)  # works
 
 def send_spp(song_position):
     print("send_spp", song_position)
-    #send(SongPositionPointerEvent(song_position, queue_id=alsa.SND_SEQ_QUEUE_DIRECT))
-    #Client.event_output(SongPositionPointerEvent(15, song_position), port=Port)
-    lsb = song_position & 0x7F
-    msb = song_position >> 7
-    Client.event_output(MidiBytesEvent([0xF2, lsb, msb]), port=Port)
-    #Queue.control(EventType.SONGPOS)
-    drain_output()  # necessary to start immediately with either approach!!
+    midi_send_event(SongPositionPointerEvent(15, song_position), drain_output=True)   # works
+    #lsb = song_position & 0x7F
+    #msb = song_position >> 7
+    #midi_send_event(MidiBytesEvent([0xF2, lsb, msb]), drain_output=True)  # works
 
 def control_change():
     print("control_change")
-    #send(SongPositionPointerEvent(song_position, queue_id=alsa.SND_SEQ_QUEUE_DIRECT))
     event = ControlChangeEvent(15, 1, 2, tag=47)
     print(f"{event.tick=}")
-    Client.event_output(event, port=Port)
-    #Client.event_output(MidiBytesEvent([0xF2, lsb, msb]), port=Port)
-    #Queue.control(EventType.SONGPOS)
-    drain_output()  # necessary to start immediately with either approach!!
+    midi_send_event(event, drain_output=True)  # works
 
 def time_sig():
     print("time_sig")
-    Client.event_output(SystemEvent(0xFD, 42), port=Port)       # did work
-    #Client.event_output(MidiBytesEvent([0xFD, 42]), port=Port)  # didn't work
-    drain_output()  # necessary to start immediately with either approach!!
+    midi_send_event(SystemEvent(0xFD, 42), drain_output=True)  # works
+    #midi_send_event(MidiBytesEvent([0xFD, 42]), drain_output=True)  # doesn't work
 
-def clock_test(secs):
+def clock_test(secs):  # works
     print("clock_test")
-    start = Queue.get_status().tick_time
+    start = midi_tick_time()
     for next in range(start + 10, start + secs * 1000, 10):
-        now = Queue.get_status().tick_time
+        now = midi_tick_time()
         if next - now > 5:
             time.sleep(0.001 * (next - now - 5))
-        Client.event_output(ClockEvent(queue_id=Queue.queue_id, tick=next), port=Port)
-        drain_output()
+        if midi_tick_time() > next:
+            print(f"clock_test: slept too long! {midi_tick_time()=}, {next=}")
+        midi_send_event(ClockEvent(tick=next), drain_output=True)
 
 def timer_test(tick):
-    print("************************************ timer_test")
-    timer_port = "0:0"
-    #send(ClockEvent(), port=timer_port)
-    #send(ClockEvent(0))
-    send(ClockEvent(dest=System_timer, tick=tick))
-    drain_output()
+    print("timer_test", tick)
+    #midi_send_event(ClockEvent(dest=System_timer, tick=tick, tag=17), drain_output=True) # doesn't work
+    midi_send_event(ClockEvent(tick=tick, tag=17), drain_output=True)  # works
 
 def send_notes():
-    print("************************************ send_notes")
+    print("send_notes")
     #time.sleep(1)
 
     #event_queue_id = Queue.queue_id
@@ -265,46 +103,35 @@ def send_notes():
     #send_queue_id = None  # no queue used, queue_id changed to 253 by ALSA
     print("using event_queue_id", event_queue_id, "send_queue_id", send_queue_id)
 
+    start = midi_tick_time()
     for i, note in enumerate(range(60, 65)):
         if False:
             print("NoteOn", note)
-            send(NoteOnEvent(note, 1, 40, queue_id=event_queue_id, relative=False))  # note, ch, velocity
-            # tick, relative, queue_id
-
-            drain_output()
+            midi_send_event(
+              # note, ch, velocity
+              NoteOnEvent(note, 1, 40, queue_id=event_queue_id, relative=False),
+              drain_output=True)
             time.sleep(0.1)
             print("NoteOff", note)
-            send(NoteOffEvent(note, 1, 0, queue_id=event_queue_id, relative=False))
-            drain_output()
+            midi_send_event(
+              NoteOffEvent(note, 1, 0, queue_id=event_queue_id, relative=False),
+              drain_output=True)
             time.sleep(0.4)
-        else:
-            print("tick_time", Queue.get_status().tick_time)
-            tick = 12*i + 6
+        else:  # works
+            print("tick_time", midi_tick_time())
+            tick = Ppq*i + start + Ppq//2
             print("NoteOn", note, "tick", tick)
-            send(NoteOnEvent(note, 1, 40,  # note, ch, velocity
-                             queue_id=event_queue_id, relative=False, tick=tick)
-                 , send_queue_id
-                )
-            # tick, relative, queue_id
+            midi_send_event(
+              # note, ch, velocity
+              NoteOnEvent(note, 1, 40, queue_id=event_queue_id, relative=False, tick=tick),
+              queue=send_queue_id)
+            print("NoteOff", note, "tick", tick+Ppq//2)
+            midi_send_event(
+              NoteOffEvent(note, 1, 0, queue_id=event_queue_id, relative=False, tick=tick+Ppq//2),
+              queue=send_queue_id,
+              drain_output=True)
+            #time.sleep(1)
 
-            #drain_output()
-            #time.sleep(0.1)
-            print("NoteOff", note, "tick", tick+6)
-            send(NoteOffEvent(note, 1, 0,
-                              queue_id=event_queue_id, relative=False, tick=tick+6)
-                 , send_queue_id
-                )
-            drain_output()
-            time.sleep(1)
-
-
-def close():
-    if Port is not None:
-        Port.close()
-    if Queue is not None:
-        Queue.close()
-    if Client is not None:
-        Client.close()
 
 def run():
     try:
@@ -316,20 +143,22 @@ def run():
         send_spp(0x1234)  # 4660
         control_change()
         time_sig()
-        create_queue()
-        queue_set_tempo(beats_per_minute = 60, ticks_per_quarter_note = 1000)
-        queue_start(True)
-        print(f"{Queue.get_status()=}")
+        create_queue(ppq=1000)
+        queue_set_tempo(beats_per_minute = 60)
+        queue_start()
+        print(f"{midi_tick_time()=}")
         time.sleep(0.5)
-        print(f"{Queue.get_status()=}")
+        print(f"{midi_tick_time()=}")
         clock_test(1)
-        print(f"{Queue.get_status()=}")
-        timer_test(40)
-        print(f"{Queue.get_status()=}")
+        print(f"{midi_tick_time()=}")
+        timer_test(midi_tick_time() + 3000)
+        print(f"{midi_tick_time()=}")
         send_notes()
-        print(f"{Queue.get_status()=}")
+        print(f"{midi_tick_time()=}")
+        time.sleep(5)
+        print(f"{midi_tick_time()=}")
     finally:
-        close()
+        midi_close()
 
 
 

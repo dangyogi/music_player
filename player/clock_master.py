@@ -56,7 +56,8 @@ from .tools.midi_utils import (
 
     EventType, PortCaps,
 
-    Tempo_status, Time_sig_status, Clock_master_channel, Clock_master_ppq_param,
+    Tempo_status, Time_sig_status,
+    Clock_master_channel, Clock_master_CC_ppq, Clock_master_CC_close_queue,
     data_to_ppq, data_to_bpm, midi_queue_time,
 )
 
@@ -209,10 +210,18 @@ def process_control_change(event):
     No queuing done on ppq.
     '''
     if event.channel == Clock_master_channel:
-        if event.param == Clock_master_ppq_param:
+        if event.param == Clock_master_CC_ppq:
             # No queuing done on this.
             queue = midi_create_queue(f"Q-{event.tag}", data_to_ppq(event.value), default=False)
             Queues[event.tag] = queue
+            return False
+        if event.param == Clock_master_CC_close_queue:
+            tag = event.value
+            if tag in Queues:
+                Queues[tag].close()
+                del Queues[tag]
+            else:
+                print(f"CC_close_queue: no queue for {tag=}")
             return False
     send_event(event)  # this is for somebody else...
     return True
