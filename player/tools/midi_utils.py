@@ -187,6 +187,38 @@ def midi_init(client_name, streams=StreamOpenType.DUPLEX):
     r'''Creates Client.  All ports for the client share the same input and output memory pools.
     '''
     global Client
+    global Clock_master_tag
+    global Sel
+    global Ports, Port_names, Default_port, Clock_master_port
+    global Queues, Default_queue, Queue_running
+    global Process_fn
+
+    global Bpm, Ppq, Ppc, Tick_interval, Time_signature
+    global Spp, Spp_countdown, Clocks, Last_clock_time
+
+    Client = None
+    Clock_master_tag = None
+    Sel = None
+
+    Ports = {}
+    Port_names = {}
+    Default_port = None
+    Clock_master_port = None
+    Queues = {}
+    Default_queue = None
+    Queue_running = False
+
+    Process_fn = None      # Process_fn(event) -> bool to drain_output
+
+    Bpm = None             # Beats (quarter notes) per minute
+    Ppq = None             # ppq setting on ALSA queue (usually maintained by clock-master)
+    Ppc = None             # pulses per CLOCK pulse
+    Tick_interval = None   # secs between ticks at Ppq * Bpm
+    Time_signature = None  # (beats, beat_type)
+    Spp = 0                # Song Position Pointer
+    Spp_countdown = None   # CLOCKs left to next SPP increment
+    Clocks = 0             # CLOCKs received since last START
+    Last_clock_time = None
 
     Client = SequencerClient(client_name, streams=streams)
         # client_name,
@@ -237,7 +269,7 @@ def midi_create_queue(name, ppq, info=None, default=True):
         #    owner: int
         #    locked: bool
         #    flags: int
-    print(f"{queue.queue_id=}")       # queue_ids are globally unique
+    print(f"Queue {name}(queue_id={queue.queue_id})")   # queue_ids are globally unique
     queue.ppq_setting = ppq
     Queues[name] = queue
     if default:
@@ -657,8 +689,7 @@ def midi_start():
 def midi_stop(tick=None):
     print("midi_stop")
     if Clock_master_port:
-        Client.event_output(StopEvent(tag=Clock_master_tag, relative=False, tick=tick),
-                            port=Clock_master_port)
+        Client.event_output(StopEvent(tag=Clock_master_tag, tick=tick), port=Clock_master_port)
     else:
         if tick:
             print(f"midi_stop: tick ignored, effective immediately!")
@@ -678,8 +709,7 @@ def midi_continue():
 def midi_spp(song_position, tick=None):
     print("midi_song_position")
     if Clock_master_port:
-        Client.event_output(SongPositionPointerEvent(0, song_position, tag=Clock_master_tag,
-                                                     relative=False, tick=tick),
+        Client.event_output(SongPositionPointerEvent(0, song_position, tag=Clock_master_tag, tick=tick),
                             port=Clock_master_port)
         Client.drain_output()
     else:

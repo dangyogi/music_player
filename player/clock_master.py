@@ -1,19 +1,23 @@
 # clock_master.py
 
-r'''This is a Midi Beat Clock Master, that accepts a CC command to change tempo.
+r'''This is a Midi Beat Clock Master, that accepts a System Common command to change tempo and CC
+ppq and CC close_queue commands to create and close a queue for a client.  See midi_utils for MIDI
+number assignments.
 
-It can also act as a pass-through to create queues for remote ALSA computers that can set the 'tick'
-parameter on events to get them queued on the dest computer by this app.
+It also acts as a pass-through to create queues for remote ALSA computers that can set the 'tick'
+parameter on events to get them queued here (on the dest computer) by this app.  Presumebly, the
+clock_master would run on the same computer as the synth.
 
-It has an inout "Timer" port that is forwarded to 0:0.  It can receive Start, Stop, Continue and SPP
-messages, which it forwards to 0:0 along with it's Clock events.  It can also receive a CC
+It has an inout "Timer" port.  It can receive Start, Stop, Continue and SPP messages, which it
+sends back out its "Timer" port along with it's Clock events.  It can also receive a CC
 command to change tempo.
 
     grok says mainstream music ranges from 60-180 bpm, slowest and fastest seen are 16-1015
        La_Campanella max tempo is 156 (quarter notes/min)
     grok says just noticable difference in bpm is 1-2%, stated at 1.5%.
-    1.015^127 would give 30-200
+    1.01506^127 would give 30-200
 
+NO, DOESN'T DO THIS:
 It automatically creates a port for each 'Net Client' (aseqnet) and connects to it.  A CC command from
 that client can set the ppq for the queue (default 480, data byte * 24 is ppq).  This port is inout,
 receiving remote events and forwarding them from the queue.
@@ -26,11 +30,10 @@ Need:
     - CC recording/replay (based on midi beat time) (midi file?)
     - note output
 
-
 Beat clock master:
     - uses queues for all output
       - queue at 24 ppq for clock events
-      - output port for clock events
+      - output "Timer" port for clock events
     - System Common to change tempo
       - changes beat clock queue and all pass-through queues
     - queues all messages received
@@ -43,7 +46,7 @@ Beat clock master:
         - ppq
         - dest port name
           - default "pass-through"
-      - events must have 'tick' set in remote host app
+      - events set 'tick' in remote host app for timed queuing (defaults to 0 for immediate delivery)
 '''
 
 import math
@@ -60,20 +63,19 @@ from .tools.midi_utils import *
 #   0xFA - Start; slave starts at next Clock message, always at SPP 0; ignore if already running
 #   0xFB - Continue; preserve SPP; ignore if already running
 #   0xFC - Stop; ignore if already stopped
-#   <there are two undefined System Real Time messages: 0xF9 and 0xFD>
+#   <there are two undefined System Real Time messages: 0xF9 and 0xFD, see midi_utils.py>
 #
 #   System Common have high order bit of channel cleared.  These generally have data bytes.
 #   0xF2 - SPP + 2 bytes as 14-bit value LSB first == midi beats (beat == 6 clocks, or a 16th note) 
 #                since the start of song.  Should not be sent while devices are in play.  Use Continue
 #                to start playing (Start resets SPP to 0).
-#   <there are two undefined System Common messages: 0xF4 and 0xF5, both allow data bytes>
-#   0xF4: Tempo
-#   0xF5: Time_sig
+#   <there are two undefined System Common messages: 0xF4 and 0xF5, both allow data bytes, see
+#   midi_utils.py>
 
 Verbose = False
 
 Queues = {}
-Queue_running = False
+Queue_running = False    # True after Start/Continue, False after Stop
 Clock_queue = None
 Timer_port = None        # write
 Output_port = None       # write
@@ -179,10 +181,12 @@ def process_start(event):
 def process_continue(event):
     r'''No queuing.
     '''
+    global Queue_running
     if Verbose:
         print(f"process_continue: continuing all queues")
     for queue in Queues.values():
         queue.continue_()
+    Queue_running = True
     if Verbose:
         print(f"process_continue: forwarding event to Timer_port")
     midi_send_event(event, port=Timer_port)
@@ -307,8 +311,7 @@ def send_clocks():
             drain_needed = False
             for tick in range(start, current_tick + Latency_in_ticks + 1, Pulses_per_clock):
                 Last_clock_tick_sent = tick
-                midi_send_event(ClockEvent(relative=False, tick=tick),
-                                queue=Clock_queue, port=Timer_port)
+                midi_send_event(ClockEvent(tick=tick), queue=Clock_queue, port=Timer_port)
                 drain_needed = True
             if drain_needed:
                 midi_drain_output()

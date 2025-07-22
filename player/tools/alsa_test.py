@@ -128,12 +128,12 @@ def send_notes():
             print("NoteOn", note)
             midi_send_event(
               # note, ch, velocity
-              NoteOnEvent(note, 1, 40, queue_id=event_queue_id, relative=False),
+              NoteOnEvent(note, 1, 40, queue_id=event_queue_id),
               drain_output=True)
             sleep(0.1)
             print("NoteOff", note)
             midi_send_event(
-              NoteOffEvent(note, 1, 0, queue_id=event_queue_id, relative=False),
+              NoteOffEvent(note, 1, 0, queue_id=event_queue_id),
               drain_output=True)
             sleep(0.4)
         else:  # works
@@ -142,13 +142,11 @@ def send_notes():
             print("NoteOn", note, "tick", tick)
             midi_send_event(
               # note, ch, velocity
-              NoteOnEvent(note, 1, 40,
-                          queue_id=event_queue_id, relative=False, tick=tick, tag=Tag),
+              NoteOnEvent(note, 1, 40, queue_id=event_queue_id, tick=tick, tag=Tag),
               queue=send_queue_id)
             print("NoteOff", note, "tick", tick+Ppq//2)
             midi_send_event(
-              NoteOffEvent(note, 1, 0,
-                           queue_id=event_queue_id, relative=False, tick=tick+Ppq//2, tag=Tag),
+              NoteOffEvent(note, 1, 0, queue_id=event_queue_id, tick=tick+Ppq//2, tag=Tag),
               queue=send_queue_id,
               drain_output=True)
             #sleep(1)

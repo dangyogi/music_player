@@ -75,3 +75,7 @@ ALSA Queues:
         default: 96 ppq, 120 BPM
 
         snd_seq_change_queue_tempo()  can be queued!
+
+    event_output:
+        port may be any port (READ/WRITE/RW); if not None, overrides source in event
+        dest must be an input port (WRITE/RW); if not None, overrides dest in event
