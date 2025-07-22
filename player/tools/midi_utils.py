@@ -13,14 +13,17 @@ Utility:
     data_to_ppq(data) -> ppq (30-200 as float)
     midi_queue_time(queue|queue_name) -> current queue tick value
 
+    Event_type_names[event.type] -> name
+    Port_names[port.port_id] -> name
+
 Initialization:
 
     midi_init(client_name, streams=DUPLEX) -> client
     midi_create_queue(name, ppq, info=None, default=True) -> Queue (only used by clock_master)
-    midi_create_input_port(name, caps=READ_PORT, type=DEFAULT_PORT_TYPE, connect_from=None)
+    midi_create_input_port(name, caps=WRITE_PORT, type=DEFAULT_PORT_TYPE, connect_from=None)
       -> Port (generally not needed)
-    midi_create_output_port(name, caps=WRITE_PORT, type=DEFAULT_PORT_TYPE,
-                           default=True, clock_master=False, connect_to=None)
+    midi_create_output_port(name, caps=READ_PORT, type=DEFAULT_PORT_TYPE,
+                            default=True, clock_master=False, connect_to=None)
       -> Port (generally not needed)
     midi_create_inout_port(name, caps=RW_PORT, type=DEFAULT_PORT_TYPE,
                            default=True, clock_master=False, connect_from=None, connect_to=None)
@@ -39,7 +42,8 @@ Initialization:
     midi_close() -> None, closes tag with clock-master, all ports, queues and client
 
 I/O:
-    midi_send_event(event, queue=None, port=None, dest=None, drain_output=False) -> None
+    midi_send_event(event, queue=None, port=None, dest=None, no_defaults=False, drain_output=False)
+      -> None
     midi_drain_output() -> None
     midi_pause(secs=None) -> None, reads and processes events while paused
     midi_process_clock(event) -> True if event was a clock event
@@ -70,9 +74,12 @@ from alsa_midi import (
 
    SYSTEM_TIMER, SYSTEM_ANNOUNCE,
 
-   ALSAError,
+   alsa, ALSAError,
 
    EventType, Address,
+
+   EventFlags,  # TIME_STAMP_TICK, TIME_MODE_ABS, EVENT_LENGTH_FIXED, PRIORITY_NORMAL are all 0
+
    NoteOnEvent, NoteOffEvent, KeyPressureEvent, ProgramChangeEvent, ChannelPressureEvent,
    PitchBendEvent, NonRegisteredParameterChangeEvent, RegisteredParameterChangeEvent,
    SetQueueTempoEvent, SongPositionPointerEvent, ControlChangeEvent, SystemEvent,
@@ -80,6 +87,8 @@ from alsa_midi import (
 )
 from alsa_midi.client import StreamOpenType
 from alsa_midi.port import DEFAULT_PORT_TYPE
+
+SND_SEQ_QUEUE_DIRECT = alsa.SND_SEQ_QUEUE_DIRECT
 
 # Midi beat clock commands:
 #
@@ -100,6 +109,12 @@ from alsa_midi.port import DEFAULT_PORT_TYPE
 
 Tempo_status = 0xF4
 Time_sig_status = 0xF5
+
+# Event_type_names[event.type] -> name
+Event_type_names = {e_value.value: e_value.name for e_value in EventType}
+
+# Port_names[port.port_id] -> name
+Port_names = {}
 
 Clock_master_channel = 15
 Clock_master_CC_ppq = 44          # ppq_data = ppq // 24
@@ -353,8 +368,9 @@ def midi_create_port(name, caps=RW_PORT, type=DEFAULT_PORT_TYPE, default=True, c
                             # This isn't necessary.
                             # Causes ALSA to add timestamp to event using queue as time source.
                             # , timestamping=True, timestamp_real=False, timestamp_queue=Queue
-    print(f"{port.port_id=}")       # port_ids are only unique to the client
+    print(f"Port {name}(port_id={port.port_id})")      # port_ids are only unique to the client
     Ports[name] = port
+    Port_names[port.port_id] = name
     if default:
         Default_port = port
     if clock_master:
@@ -430,7 +446,9 @@ def midi_address(address):
     else:
         client = address
         port = '0'
-    if client.isdigit():
+    if not client:
+        client = Client.client_id
+    elif client.isdigit():
         client = int(client)
     else:
         client_info = None
@@ -465,8 +483,16 @@ def midi_process_fn(fn):
 #
 # Invalid queue_id in either location raises ALSAError: Invalid argument
 #
-def midi_send_event(event, queue=None, port=None, dest=None, drain_output=False):
-    r'''queue, port and dest may be names.
+def midi_send_event(event, queue=None, port=None, dest=None, no_defaults=False, drain_output=False):
+    r'''Calls Client.event_output unpacking arguments for it.
+
+    Also calls Client.drain_output if drain_output is True.
+
+    queue may be a Queue object, queue_id, or queue name.  Defaults to Default_queue if event.tick.
+    port may be a Port object, port_id, or port name.  Defaults to Default_port.
+    dest may be an Address, Port object, PortInfo, (client_id, port_id) or "client_name/id:port_name/id".
+
+    Defaults may be disabled by passing no_defaults=True.
 
     Returns nothing.
     '''
@@ -476,7 +502,7 @@ def midi_send_event(event, queue=None, port=None, dest=None, drain_output=False)
             return
         else:
             queue = Queues[queue]
-    elif queue is None and event.tick and Default_queue:
+    elif queue is None and event.tick and Default_queue and not no_defaults:
         queue = Default_queue
     if isinstance(port, str):
         if port not in Ports:
@@ -484,14 +510,15 @@ def midi_send_event(event, queue=None, port=None, dest=None, drain_output=False)
             return
         else:
             port = Ports[port]
-    elif port is None and Default_port:
+    elif port is None and Default_port and not no_defaults:
         port = Default_port
     if isinstance(dest, str):
-        if dest not in Ports:
-            print(f"midi_send_event: unknown port {port!r} -- not sent!")
+        addr = midi_address(dest)
+        if addr is None:
+            print(f"midi_send_event: unknown dest {dest!r} -- not sent!")
             return
         else:
-            port = Ports[port]
+            dest = addr
     Client.event_output(event, queue=queue, port=port, dest=dest)
     if drain_output:
         midi_drain_output()

@@ -49,17 +49,7 @@ Beat clock master:
 import math
 import time
 
-from .tools.midi_utils import (
-    midi_init, midi_close,
-    midi_create_queue, midi_create_output_port, midi_create_input_port, midi_create_port,
-    midi_process_fn, midi_send_event, midi_drain_output, midi_pause,
-
-    EventType, PortCaps,
-
-    Tempo_status, Time_sig_status,
-    Clock_master_channel, Clock_master_CC_ppq, Clock_master_CC_close_queue,
-    data_to_ppq, data_to_bpm, midi_queue_time,
-)
+from .tools.midi_utils import *
 
 # Midi beat clock commands:
 #
@@ -80,6 +70,7 @@ from .tools.midi_utils import (
 #   0xF4: Tempo
 #   0xF5: Time_sig
 
+Verbose = False
 
 Queues = {}
 Queue_running = False
@@ -100,23 +91,31 @@ Last_clock_tick_sent = None
 def init():
     r'''Initializes midi, creates "Clock" queue and "Input", "Timer" and "Output" ports.
     '''
-    global Timer_port, Output_port
+    global Immediate_port, Timer_port, Output_port
 
     midi_init("Clock Master")
     Clock_queue = midi_create_queue("Clock", Clock_ppq, default=False)
     Queues["Clock"] = Clock_queue
-    midi_create_input_port("Input", connect_from="Net Client")
+    midi_create_input_port("Input", connect_from=["Net Client"])
     Immediate_port = midi_create_port("Immediate", caps=PortCaps.READ | PortCaps.WRITE, default=False)
     Timer_port = midi_create_output_port("Timer", default=False)
     Output_port = midi_create_output_port("Output", default=False)
     midi_process_fn(process_event)
 
 def process_event(event):
+    if Verbose:
+        print(f"process_event: {event}, source={event.source}, dest={event.dest}, tag={event.tag}")
     drain_output = False
     if event.type in Event_fns:
+        if Verbose:
+            print(f"process_event: event type={Event_type_names[event.type]} in Event_fns, "
+                  f"calling Event_fn")
         if Event_fns[event.type](event):
             drain_output = True
     else:
+        if Verbose:
+            print(f"process_event: event type={Event_type_names[event.type]} not in Event_fns, "
+                  f"forwarding to Output_port")
         send_event(event)
         drain_output = True
     return drain_output
@@ -133,9 +132,14 @@ def send_event(event, port=None, drain_output=False):
     if event.tag and event.tick:
         # send through queue
         if event.tag in Queues:
+            if Verbose:
+                print(f"send_event: tag={event.tag} in Queues, "
+                      f"queuing to port={Port_names[port.port_id]}")
             midi_send_event(event, queue=Queues[event.tag], port=port, drain_output=drain_output)
             return
-        print(f"process_event: {event.tag=} not in Queues -- forwarding direct")
+        print(f"send_event: {event.tag=} not in Queues -- forwarding direct")
+    if Verbose:
+        print(f"send_event: tag={event.tag}, forwarding direct to port={Port_names[port.port_id]}")
     midi_send_event(event, port=port, drain_output=drain_output)
 
 def queue(event):
@@ -146,26 +150,41 @@ def queue(event):
     if event.dest != Immediate_port.port_id and event.tag and event.tick:
         # send through queue
         if event.tag in Queues:
+            if Verbose:
+                print(f"queue: {event.dest=}, {event.tag=}, {event.tick=} in Queues, "
+                      f"queuing to Immediate_port")
+            #midi_send_event(event, queue=Queues[event.tag], port=Immediate_port)
             midi_send_event(event, queue=Queues[event.tag], port=Immediate_port, dest=Immediate_port)
             return True
         print(f"process_event: {event.tag=} not in Queues -- forwarding direct")
+    if Verbose:
+        print(f"queue: {event.dest=}, {event.tag=}, {event.tick=}; not queued")
     return False
 
 def process_start(event):
     r'''No queuing.
     '''
-    global Last_clock_tick_sent
+    global Last_clock_tick_sent, Queue_running
+    if Verbose:
+        print(f"process_start: starting all queues")
     for queue in Queues.values():
         queue.start()
+    Queue_running = True
     Last_clock_tick_sent = None
+    if Verbose:
+        print(f"process_start: forwarding event to Timer_port")
     midi_send_event(event, port=Timer_port)
     return True
 
 def process_continue(event):
     r'''No queuing.
     '''
+    if Verbose:
+        print(f"process_continue: continuing all queues")
     for queue in Queues.values():
         queue.continue_()
+    if Verbose:
+        print(f"process_continue: forwarding event to Timer_port")
     midi_send_event(event, port=Timer_port)
     return True
 
@@ -173,9 +192,17 @@ def process_stop(event):
     r'''May be queued.
     '''
     #global Last_clock_tick_sent
+    global Queue_running
+    if Verbose:
+        print(f"process_stop: queue?")
     if not queue(event):
-        for queue in Queues.values():
-            queue.stop()
+        if Verbose:
+            print(f"process_stop: not queued, stopping all queues")
+        for q in Queues.values():
+            q.stop()
+        Queue_running = False
+        if Verbose:
+            print(f"process_stop: forwarding event to Timer_port")
         midi_send_event(event, port=Timer_port, drain_output=True)
         #now = midi_queue_time(Clock_queue)
         #if Last_clock_tick_sent > now:
@@ -183,7 +210,11 @@ def process_stop(event):
     return False
 
 def process_songpos(event):
+    if Verbose:
+        print(f"process_songpos: queue?")
     if not queue(event):
+        if Verbose:
+            print(f"process_songpos: not queued, forwarding to Timer_port")
         midi_send_event(event, port=Timer_port)
     return True
 
@@ -194,13 +225,19 @@ def process_system(event):
     '''
     global Bpm
 
+    if Verbose:
+        print(f"process_system: got {hex(event.event)}, queue?")
     if not queue(event):
         if event.event == Tempo_status:
             Bpm = bpm = data_to_bpm(event.result)
+            if Verbose:
+                print(f"process_system: Tempo({bpm}) not queued, setting tempo on all queues")
             recalc_clock()
-            for queue in Queues.values():
-                queue.set_tempo(bpm=bpm, ppq=queue.ppq_setting)
+            for q in Queues.values():
+                q.set_tempo(bpm=bpm, ppq=q.ppq_setting)
         #elif event.event == Time_sig_status:
+        if Verbose:
+            print(f"process_system: not queued, forwarding to Timer_port")
         midi_send_event(event, port=Timer_port)
     return True
 
@@ -212,17 +249,28 @@ def process_control_change(event):
     if event.channel == Clock_master_channel:
         if event.param == Clock_master_CC_ppq:
             # No queuing done on this.
-            queue = midi_create_queue(f"Q-{event.tag}", data_to_ppq(event.value), default=False)
+            ppq = data_to_ppq(event.value)
+            q_name = f"Q-{event.tag}"
+            if Verbose:
+                print(f"process_control_change: CC_ppq {ppq}, creating queue {q_name}")
+            queue = midi_create_queue(q_name, ppq, default=False)
             Queues[event.tag] = queue
             return False
         if event.param == Clock_master_CC_close_queue:
             tag = event.value
             if tag in Queues:
+                if Verbose:
+                    print(f"process_control_change: CC_close_queue {tag}, closing queue")
                 Queues[tag].close()
                 del Queues[tag]
             else:
+                if Verbose:
+                    print(f"process_control_change: CC_close_queue {tag}, unknown queue")
                 print(f"CC_close_queue: no queue for {tag=}")
             return False
+    if Verbose:
+        print(f"process_control_change: channel={event.channel}, param={event.param}; not mine, "
+              f"forwarding to Output_port")
     send_event(event)  # this is for somebody else...
     return True
 
@@ -239,6 +287,8 @@ def recalc_clock():
     global Secs_per_tick, Latency_in_ticks
     Secs_per_tick = 60 / (Bpm * Clock_ppq)
     Latency_in_ticks = int(math.ceil(Latency / Secs_per_tick))
+    if Verbose:
+        print(f"recalc_clock: {Secs_per_tick=}, {Latency_in_ticks=}")
 
 
 def send_clocks():
@@ -275,6 +325,15 @@ def send_clocks():
             midi_pause()
 
 def run():
+    global Verbose
+
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--verbose', '-v', action="store_true", default=False)
+
+    args = parser.parse_args()
+    Verbose = args.verbose
+
     try:
         init()
         time.sleep(1)

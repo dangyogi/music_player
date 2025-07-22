@@ -1,4 +1,4 @@
-# alsa_timer.py
+# alsa_test.py
 
 import time
 
@@ -20,23 +20,38 @@ from .midi_utils import *
 
 Queue = None
 Ppq = None
+Use_master = False
+Tag = 0
 
-def init():
+def init(connect_to=None):
     r'''Creates client and output (read) port.
     '''
+    global Tag
+
     midi_init("alsa-timer")
-    midi_create_output_port("output")
+    if Use_master:
+        midi_create_output_port("output", clock_master=True, connect_to=connect_to)
+        Tag = 117
+        midi_set_tag(Tag)
+        midi_process_fn(midi_process_clock)
+    else:
+        midi_create_output_port("output", connect_to=connect_to)
 
 def create_queue(ppq):
     global Queue, Ppq
-    Queue = midi_create_queue("alsa-timer queue", ppq)
     Ppq = ppq
+    if Use_master:
+        midi_set_ppq(ppq)
+    else:
+        Queue = midi_create_queue("alsa-timer queue", ppq)
 
 def queue_set_tempo(beats_per_minute):
     print(f"queue_set_tempo: {beats_per_minute=}")
-    print(f"  {Queue.get_tempo()=}")
+    if not Use_master:
+        print(f"  {Queue.get_tempo()=}")
     midi_set_tempo(beats_per_minute)
-    print(f"  {Queue.get_tempo()=}")
+    if not Use_master:
+        print(f"  {Queue.get_tempo()=}")
 
 def queue_start():
     print("queue start")
@@ -80,19 +95,23 @@ def clock_test(secs):  # works
     for next in range(start + 10, start + secs * 1000, 10):
         now = midi_tick_time()
         if next - now > 5:
-            time.sleep(0.001 * (next - now - 5))
+            sleep(0.001 * (next - now - 5))
         if midi_tick_time() > next:
             print(f"clock_test: slept too long! {midi_tick_time()=}, {next=}")
-        midi_send_event(ClockEvent(tick=next), drain_output=True)
+        midi_send_event(ClockEvent(tick=next, tag=Tag), drain_output=True)
 
 def timer_test(tick):
     print("timer_test", tick)
-    #midi_send_event(ClockEvent(dest=SYSTEM_TIMER, tick=tick, tag=17), drain_output=True) # doesn't work
-    midi_send_event(ClockEvent(tick=tick, tag=17), drain_output=True)  # works
+    if Use_master:
+        tag = Tag
+    else:
+        tag = 17
+    #midi_send_event(ClockEvent(dest=SYSTEM_TIMER, tick=tick, tag=tag), drain_output=True) # doesn't work
+    midi_send_event(ClockEvent(tick=tick, tag=tag), drain_output=True)  # works
 
 def send_notes():
     print("send_notes")
-    #time.sleep(1)
+    #sleep(1)
 
     #event_queue_id = Queue.queue_id
     #event_queue_id = 14   # Produces ALSAError: Invalid argument with or without tick supplied
@@ -111,43 +130,52 @@ def send_notes():
               # note, ch, velocity
               NoteOnEvent(note, 1, 40, queue_id=event_queue_id, relative=False),
               drain_output=True)
-            time.sleep(0.1)
+            sleep(0.1)
             print("NoteOff", note)
             midi_send_event(
               NoteOffEvent(note, 1, 0, queue_id=event_queue_id, relative=False),
               drain_output=True)
-            time.sleep(0.4)
+            sleep(0.4)
         else:  # works
             print("tick_time", midi_tick_time())
             tick = Ppq*i + start + Ppq//2
             print("NoteOn", note, "tick", tick)
             midi_send_event(
               # note, ch, velocity
-              NoteOnEvent(note, 1, 40, queue_id=event_queue_id, relative=False, tick=tick),
+              NoteOnEvent(note, 1, 40,
+                          queue_id=event_queue_id, relative=False, tick=tick, tag=Tag),
               queue=send_queue_id)
             print("NoteOff", note, "tick", tick+Ppq//2)
             midi_send_event(
-              NoteOffEvent(note, 1, 0, queue_id=event_queue_id, relative=False, tick=tick+Ppq//2),
+              NoteOffEvent(note, 1, 0,
+                           queue_id=event_queue_id, relative=False, tick=tick+Ppq//2, tag=Tag),
               queue=send_queue_id,
               drain_output=True)
-            #time.sleep(1)
+            #sleep(1)
 
+def sleep(secs):
+    if Use_master:
+        midi_pause(secs)
+    else:
+        time.sleep(secs)
 
-def run():
+def run_test():
     try:
-        init()
-        time.sleep(1)
+        init(["Clock Master:Input"] if Use_master else None)
+        sleep(1)
         clock()
         stop()
         send_continue()
         send_spp(0x1234)  # 4660
         control_change()
         time_sig()
+
         create_queue(ppq=1000)
         queue_set_tempo(beats_per_minute = 60)
         queue_start()
-        print(f"{midi_tick_time()=}")
-        time.sleep(0.5)
+        if not Use_master:
+            print(f"{midi_tick_time()=}")
+        sleep(0.5)
         print(f"{midi_tick_time()=}")
         clock_test(1)
         print(f"{midi_tick_time()=}")
@@ -155,13 +183,26 @@ def run():
         print(f"{midi_tick_time()=}")
         send_notes()
         print(f"{midi_tick_time()=}")
-        time.sleep(5)
+        sleep(5)
         print(f"{midi_tick_time()=}")
     finally:
         midi_close()
 
 
+def run():
+    global Use_master
+
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--master', '-m', action="store_true", default=False)
+
+    args = parser.parse_args()
+
+    Use_master = args.master
+
+    run_test()
+
+
 
 if __name__ == "__main__":
     run()
-

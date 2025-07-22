@@ -29,6 +29,10 @@ MIDI beat clock
 
 ALSA Queues:
 
+    I'm seeing messages being randomly dropped.  Guessing that these are unqueued.  I guess the
+    receiver has to be ready for it when the event is sent.  Setting tick in the past should
+    still queue it.
+
     memory pool per client.  Same pool Used for all input/output.  May be shared by multiple clients.
         snd_seq_set_client_pool_output() sets output pool size
         snd_seq_set_client_pool_output_room() sets output room size, used to wake up blocking write call
@@ -38,23 +42,29 @@ ALSA Queues:
         flags
             timestamp: real-time or song-ticks
             time-mode: absolute or relative to current time
+            flags get changed in unknown ways, so receiver may see different flags than those sent.
+            Defaults for flags are TIME_MODE_ABS and TIME_STAMP_TICK, so safe to just ignore flags.
+        tag is always left unchanged, so receiver sees it unmolested.
         timestamp
-        scheduling queue id
-        source addr (client-id:port-id)
-        dest addr
+        tick, None sometimes changed to 0.  This is set by ALSA when the message is queued with flag
+              TIME_STAMP_ABS.
+        queue_id, overridden by queue_id in event_output.  SND_SEQ_QUEUE_DIRECT if both None.
+                  use SND_SEQ_QUEUE_DIRECT as target queue id to send directly (bypassing queue)
+        source addr (client-id:port-id), overridden by port in event_output.  Port 0 if both None.
+        dest addr, overridden by dest in event_output.  Goes to subscribers if both None.
+        relative gets changed in unknown ways.  Default is False, so safe to just ignore it.
         event data (up to 12 bytes)
-
-        use SND_SEQ_QUEUE_DIRECT as target queue id to send directly (bypassing queue)
 
         snd_seq_ev_schedule_real()
         snd_seq_ev_schedule_tick()
 
         ALSA sets source.client, sender sets source.port, and dest.client, dest.port to deliver to that
-        dest (ignoring subscriptions, I think).  Set dest.client to SND_SEQ_ADDRESS_SUBSCRIBERS to send
-        to subscribers.
+        dest (ignoring subscriptions).  Set dest.client to SND_SEQ_ADDRESS_SUBSCRIBERS to send
+        to subscribers (or just leave dest as None).
 
         SYSTEM:TIMER, dest for queue events like start, stop, continue, change tempo, etc.  Received
-        events are broadcast to all subscribed clients
+        events are broadcast to all subscribed clients.  (Is this true?  Thought you couldn't send to
+        SYSTEM_TIMER!)
 
         SYSTEM:ANNOUNCE is read only.
 
