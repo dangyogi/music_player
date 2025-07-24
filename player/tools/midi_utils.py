@@ -12,12 +12,14 @@ Utility:
     ppq_to_data(ppq) -> data byte for ControlChangeEvent to clock-master
     data_to_ppq(data) -> ppq (30-200 as float)
     midi_queue_time(queue|queue_name) -> current queue tick value
+    trace(*msgs) # adds truncated time to front
 
     Event_type_names[event.type] -> name
     Port_names[port.port_id] -> name
 
 Initialization:
 
+    midi_set_verbose(verbose=True) -> None
     midi_init(client_name, streams=DUPLEX) -> client
     midi_create_queue(name, ppq, info=None, default=True) -> Queue (only used by clock_master)
     midi_create_input_port(name, caps=WRITE_PORT, type=DEFAULT_PORT_TYPE, connect_from=None)
@@ -45,10 +47,19 @@ I/O:
     midi_send_event(event, queue=None, port=None, dest=None, no_defaults=False, drain_output=False)
       -> None
     midi_drain_output() -> None
-    midi_pause(secs=None) -> None, reads and processes events while paused
+    midi_pause(secs=None, post_fns=None) -> None, reads and processes events while paused.
+                                            post_fns should be an empty list that will loaded by
+                                            the fn registered with midi_process_fn with fns to process
+                                            after all events have been received and drain_output has
+                                            been called.  These are called with no arguments and must
+                                            return True if drain_output needs to be called (again).
     midi_process_clock(event) -> True if event was a clock event
                                  (Clock, Start, Stop, Continue, tempo, time_signature, spp)
-                                 no drain_output required on any of these (i.e., if True returned)
+                                 No drain_output required on any of these (i.e., if True returned).
+                                 Register midi_process_clock_fn rather than midi_process_clock if
+                                 that's all you need.
+    midi_process_clock_fn(event) -> can be passed to midi_process_fn if no other events require
+                                    processing.
 
 To interface with the clock-master:
 
@@ -107,6 +118,7 @@ SND_SEQ_QUEUE_DIRECT = alsa.SND_SEQ_QUEUE_DIRECT
 #   we'll use 0xF4 for tempo (bpm = 30 * 1.01506^data)
 #         and 0xF5 for time_signature (data = (beats << 4) | (beat_type >> 1))
 
+Verbose = False
 Tempo_status = 0xF4
 Time_sig_status = 0xF5
 
@@ -120,7 +132,7 @@ Clock_master_channel = 15
 Clock_master_CC_ppq = 44          # ppq_data = ppq // 24
 Clock_master_CC_close_queue = 45  # tag
 Clock_master_tag = None
-
+Pulses_per_clock = 20
 
 Sel = None
 Client = None
@@ -138,7 +150,7 @@ Ppc = None             # pulses per CLOCK pulse
 Spp = 0                # Song Position Pointer
 Spp_countdown = None   # CLOCKs left to next SPP increment
 Queue_running = False
-Clocks = 0             # CLOCKs received since last START
+Clocks = 0             # CLOCKs received since last START at 24 per quarter note (24 ppq)
 Last_clock_time = None
 Time_signature = None  # (beats, beat_type)
 
@@ -183,6 +195,15 @@ def midi_queue_time(queue):
         queue = Queues[queue]
     return queue.get_status().tick_time
 
+def trace(*msgs):
+    r'''adds truncated time to front
+    '''
+    print(f"{round(time.clock_gettime(time.CLOCK_MONOTONIC) % 10, 5):<07}", *msgs)
+
+def midi_set_verbose(verbose=True):
+    global Verbose
+    Verbose = verbose
+
 def midi_init(client_name, streams=StreamOpenType.DUPLEX):
     r'''Creates Client.  All ports for the client share the same input and output memory pools.
     '''
@@ -200,11 +221,12 @@ def midi_init(client_name, streams=StreamOpenType.DUPLEX):
     Clock_master_tag = None
     Sel = None
 
-    Ports = {}
-    Port_names = {}
+    # Don't create new dicts because importers only have access to the original dicts
+    Ports.clear()
+    Port_names.clear()
     Default_port = None
     Clock_master_port = None
-    Queues = {}
+    Queues.clear()
     Default_queue = None
     Queue_running = False
 
@@ -226,7 +248,8 @@ def midi_init(client_name, streams=StreamOpenType.DUPLEX):
         # mode (default OpenMode.NONBLOCK -- or 0), applies to both read and write operations,
         #                                           must be NONBLOCK
         # sequencer_name (default "default"), special meaning to ALSA, usually want "default"
-    print(f"{Client.client_id=}")     # client_ids are globally unique
+    if Verbose:
+        trace(f"{Client.client_id=}")     # client_ids are globally unique
     return Client
 
     #print(f"{Client.get_client_info()=}")
@@ -269,7 +292,8 @@ def midi_create_queue(name, ppq, info=None, default=True):
         #    owner: int
         #    locked: bool
         #    flags: int
-    print(f"Queue {name}(queue_id={queue.queue_id})")   # queue_ids are globally unique
+    if Verbose:
+        trace(f"Queue {name}(queue_id={queue.queue_id})")   # queue_ids are globally unique
     queue.ppq_setting = ppq
     Queues[name] = queue
     if default:
@@ -400,7 +424,8 @@ def midi_create_port(name, caps=RW_PORT, type=DEFAULT_PORT_TYPE, default=True, c
                             # This isn't necessary.
                             # Causes ALSA to add timestamp to event using queue as time source.
                             # , timestamping=True, timestamp_real=False, timestamp_queue=Queue
-    print(f"Port {name}(port_id={port.port_id})")      # port_ids are only unique to the client
+    if Verbose:
+        trace(f"Port {name}(port_id={port.port_id})")      # port_ids are only unique to the client
     Ports[name] = port
     Port_names[port.port_id] = name
     if default:
@@ -558,72 +583,151 @@ def midi_send_event(event, queue=None, port=None, dest=None, no_defaults=False, 
 def midi_drain_output():
     Client.drain_output()
 
-def midi_pause(secs=None):
+def midi_pause(secs=None, post_fns=None):
+    r'''Pause secs waiting for events.
+
+    Calls the process_fn registered with midi_process_fn for each event received. 
+
+    secs may be None (pause as long as it takes to receive an event), 0 (don't pause at all, just do a
+    quick check), or a (perhaps fractional) number of secs to wait.  If a number is given, the program
+    will be suspended for that many seconds (rather than returning when the first event is received).
+
+    post_fns is a list of functions to call after drain_output is called.  These are called with
+    no arguments and must return True if drain_output needs to be called (again).  The caller must
+    arrange for this list to also be available to the process_fn registered with midi_process_fn,
+    so that it can append functions to it.  When secs is a number, this list is cleared between
+    each batch of events received.  In that case, the midi_pause caller will see an empty list
+    after the call to midi_pause and not see the functions added by the process_fn.
+    '''
     global Sel
     if Sel is None:
         Sel = selectors.DefaultSelector()
         Sel.register(Client._fd, selectors.EVENT_READ, Process_fn)
 
-    drain_output = False
-    for sk, sel_event in Sel.select(secs):
-        num_pending = Client.event_input_pending(True)
-        for i in range(1, num_pending + 1):
-            #print("reading", i)
-            event = Client.event_input()
-            if sk.data(event):
-                drain_output = True
-    if drain_output:
-        Client.drain_output()
+    def wait_once(secs):
+        drain_output = False
+        for sk, sel_event in Sel.select(secs):
+            num_pending = Client.event_input_pending(True)
+            for i in range(1, num_pending + 1):
+                #print("reading", i)
+                event = Client.event_input()
+                if sk.data(event):
+                    drain_output = True
+        if drain_output:
+            Client.drain_output()
+        if post_fns:
+            if Verbose:
+                trace("midi_pause: running post_fns")
+            drain_output = False
+            for fn in post_fns:
+                if fn():
+                    drain_output = True
+            if drain_output:
+                Client.drain_output()
+
+    if secs is None or secs == 0:
+        wait_once(secs)
+    else:
+        end = time.clock_gettime(time.CLOCK_MONOTONIC) + secs
+        while secs > 0:
+            wait_once(secs)
+            secs = end - time.clock_gettime(time.CLOCK_MONOTONIC)
+            if post_fns:
+                post_fns.clear()
+
+def process_clock(event):
+    global Spp, Queue_running, Spp_countdown, Clocks, Last_clock_time
+
+    if Queue_running:
+        Spp_countdown -= 1
+        if Spp_countdown <= 0:
+            Spp += 1
+            Spp_countdown = Ppq // 6
+        Clocks = event.tick // Pulses_per_clock
+        Last_clock_time = time.clock_gettime(time.CLOCK_MONOTONIC)
+        if Verbose and Clocks < 10:
+            trace(f"process_clock: event={event}, source={event.source}, tag={event.tag}, "
+                  f"tick={event.tick}, now={Last_clock_time}")
+    return True
+
+def process_start(event):
+    global Spp, Queue_running, Spp_countdown, Clocks, Last_clock_time
+
+    Queue_running = True
+    Spp = 0
+    Spp_countdown = Ppq // 6
+    Clocks = 0
+    Last_clock_time = None
+    if Verbose:
+        trace("process_start: Last_clock_time=None")
+    return True
+
+def process_stop(event):
+    # we want to add time.CONTINUE = time.STOP to Last_clock_time
+    global Queue_running, Last_clock_time
+
+    Queue_running = False
+    if Last_clock_time is not None:
+        Last_clock_time -= time.clock_gettime(time.CLOCK_MONOTONIC)
+        if Verbose:
+            trace(f"process_stop: Last_clock_time={round(Last_clock_time, 5)}")
+    return True
+
+def process_continue(event):
+    global Queue_running, Last_clock_time
+
+    Queue_running = True
+    if Last_clock_time is not None:
+        Last_clock_time += time.clock_gettime(time.CLOCK_MONOTONIC)
+        if Verbose:
+            trace(f"process_continue: Last_clock_time={round(Last_clock_time, 5)}")
+    return True
+
+def process_songpos(event):
+    global Spp, Spp_countdown
+
+    Spp = event.value
+    Spp_countdown = Ppq // 6
+    return True
+
+def process_system(event):
+    global Bpm, Tick_interval, Time_signature
+
+    if event.event == Tempo_status:
+        Bpm = data_to_bpm(event.result)
+        Tick_interval = 60.0 / (Bpm * Ppq)  # in secs
+        if Verbose:
+            trace(f"Got tempo message, {Bpm=}, {Ppq=}, Tick_interval={round(Tick_interval, 5)}")
+        return True
+    if event.event == Time_sig_status:
+        Time_signature = data_to_time_sig(event.result)
+        return True
+    return False
+
+Event_fns = {
+    EventType.CLOCK: process_clock,
+    EventType.START: process_start,
+    EventType.STOP: process_stop,
+    EventType.CONTINUE: process_continue,
+    EventType.SONGPOS: process_songpos,
+    EventType.SYSTEM: process_system,
+}
 
 def midi_process_clock(event):
     r'''Processes: Clock, Start, Stop, Continue, tempo, time_signature, spp
 
-    Returns True if the event was one of these, False otherwise.
+    Returns True if the event was handled, False otherwise.
 
     No drain_output required on any of these.
     '''
-    global Bpm, Tick_interval, Time_signature
-    global Spp, Queue_running, Spp_countdown, Clocks, Last_clock_time
+    if event.type in Event_fns:
+        return Event_fns[event.type](event)
+    return False
 
-    if event.type == EventType.CLOCK:
-        if Queue_running:
-            Spp_countdown -= 1
-            if Spp_countdown <= 0:
-                Spp += 1
-                Spp_countdown = Ppq // 6
-            Clocks += 1
-            Last_clock_time = time.clock_gettime(time.CLOCK_MONOTONIC)
-        return True
-    if event.type == EventType.START:
-        Queue_running = True
-        Spp = 0
-        Spp_countdown = Ppq // 6
-        Clocks = 0
-        Last_clock_time = None
-        return True
-    if event.type == EventType.STOP:
-        # we want to add time.CONTINUE = time.STOP to Last_clock_time
-        Queue_running = False
-        if Last_clock_time is not None:
-            Last_clock_time -= time.clock_gettime(time.CLOCK_MONOTONIC)
-        return True
-    if event.type == EventType.CONTINUE:
-        Queue_running = True
-        if Last_clock_time is not None:
-            Last_clock_time += time.clock_gettime(time.CLOCK_MONOTONIC)
-        return True
-    if event.type == EventType.SONGPOS:
-        Spp = event.value
-        Spp_countdown = Ppq // 6
-        return True
-    if event.type == EventType.SYSTEM:
-        if event.event == Tempo_status:
-            Bpm = data_to_bpm(event.value)
-            Tick_interval = 60.0 / (Bpm * Ppq)  # in secs
-            return True
-        if event.event == Time_sig_status:
-            Time_signature = data_to_time_sig(event.value)
-            return True
+def midi_process_clock_fn(event):
+    r'''Calls midi_process_clock, and returns False (no drain_output required).
+    '''
+    midi_process_clock(event)
     return False
 
 def midi_set_tag(tag):
@@ -638,6 +742,8 @@ def midi_set_ppq(ppq):
     global Ppq, Ppc
     Ppq = ppq
     Ppc = ppq // 24  # pulses per CLOCK pulse
+    if Verbose:
+        trace(f"midi_set_ppq: {Ppq=}, {Ppc=}")
     if Clock_master_port is not None and Clock_master_tag is not None:
         midi_send_ppq()
 
@@ -656,7 +762,8 @@ def midi_close_queue():
     Client.drain_output()
 
 def midi_set_tempo(bpm):
-    print(f"midi_set_tempo: {bpm=}")
+    if Verbose:
+        trace(f"midi_set_tempo: {bpm=}")
     if Clock_master_port:
         Client.event_output(SystemEvent(Tempo_status, bpm_to_data(bpm), tag=Clock_master_tag),
                             port=Clock_master_port)
@@ -678,7 +785,8 @@ def midi_set_time_signature(beats, beat_type):
         Time_signature = (beats, beat_type)
 
 def midi_start():
-    print("midi_start")
+    if Verbose:
+        trace("midi_start")
     if Clock_master_port:
         Client.event_output(StartEvent(), port=Clock_master_port)
     else:
@@ -687,7 +795,8 @@ def midi_start():
     Client.drain_output()
 
 def midi_stop(tick=None):
-    print("midi_stop")
+    if Verbose:
+        trace("midi_stop")
     if Clock_master_port:
         Client.event_output(StopEvent(tag=Clock_master_tag, tick=tick), port=Clock_master_port)
     else:
@@ -698,7 +807,8 @@ def midi_stop(tick=None):
     Client.drain_output()
 
 def midi_continue():
-    print("midi_continue")
+    if Verbose:
+        trace("midi_continue")
     if Clock_master_port:
         Client.event_output(ContinueEvent(tag=Clock_master_tag), port=Clock_master_port)
     else:
@@ -707,7 +817,8 @@ def midi_continue():
     Client.drain_output()
 
 def midi_spp(song_position, tick=None):
-    print("midi_song_position")
+    if Verbose:
+        trace("midi_song_position")
     if Clock_master_port:
         Client.event_output(SongPositionPointerEvent(0, song_position, tag=Clock_master_tag, tick=tick),
                             port=Clock_master_port)
@@ -724,8 +835,17 @@ def midi_tick_time():
     Based on set_ppq and set_tempo since last Clock received.
     '''
     if Clock_master_port:
-        delta_t = time.clock_gettime(time.CLOCK_MONOTONIC) - Last_clock_time
-        return Ppc * Clocks + int(round(delta_t / Tick_interval))
+        if Last_clock_time is None:
+            return 0
+        if Queue_running:
+            delta_t = time.clock_gettime(time.CLOCK_MONOTONIC) - Last_clock_time
+        else:
+            delta_t = -Last_clock_time
+        ans = Ppc * Clocks + int(round(delta_t / Tick_interval))
+        if Verbose:
+            trace(f"midi_tick_time: {Clocks=}, {Ppc=}, delta_t={round(delta_t, 5)}, "
+                  f"Tick_interval={round(Tick_interval, 5)}, {ans=}")
+        return ans
     if Default_queue is not None:
         return Default_queue.get_status().tick_time
     print(f"midi_tick_time: no default queue")

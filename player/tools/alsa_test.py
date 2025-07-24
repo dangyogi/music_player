@@ -21,87 +21,89 @@ from .midi_utils import *
 Queue = None
 Ppq = None
 Use_master = False
-Tag = 0
+Tag = 117
 
 def init(connect_to=None):
     r'''Creates client and output (read) port.
     '''
-    global Tag
-
     midi_init("alsa-timer")
     if Use_master:
+        midi_create_input_port("input", connect_from=["Clock Master:Timer"])
+        midi_process_fn(midi_process_clock_fn)
         midi_create_output_port("output", clock_master=True, connect_to=connect_to)
-        Tag = 117
         midi_set_tag(Tag)
-        midi_process_fn(midi_process_clock)
     else:
         midi_create_output_port("output", connect_to=connect_to)
 
 def create_queue(ppq):
-    global Queue, Ppq
+    global Queue, Ppq, Ppc
     Ppq = ppq
+    Ppc = ppq // 24
     if Use_master:
         midi_set_ppq(ppq)
     else:
         Queue = midi_create_queue("alsa-timer queue", ppq)
 
 def queue_set_tempo(beats_per_minute):
-    print(f"queue_set_tempo: {beats_per_minute=}")
+    global Secs_per_pulse
+    trace(f"queue_set_tempo: {beats_per_minute=}")
     if not Use_master:
         print(f"  {Queue.get_tempo()=}")
     midi_set_tempo(beats_per_minute)
+    Secs_per_pulse = 60 / (Ppq * beats_per_minute)
     if not Use_master:
         print(f"  {Queue.get_tempo()=}")
 
 def queue_start():
-    print("queue start")
+    trace("queue start")
     midi_start()
 
 def clock():
-    print("clock")
+    trace("clock")
     midi_send_event(ClockEvent(tag=17), drain_output=True)  # works
 
 def stop():
-    print("stop")
+    trace("stop")
     midi_send_event(StopEvent(tag=47), drain_output=True)   # works
     #midi_send_event(MidiBytesEvent([0xFC], tag=47), drain_output=True)  # works
 
 def send_continue():
-    print("send_continue")
+    trace("send_continue")
     midi_send_event(ContinueEvent(), drain_output=True)   # works
     #midi_send_event(MidiBytesEvent([0xFB]), drain_output=True)  # works
 
 def send_spp(song_position):
-    print("send_spp", song_position)
+    trace("send_spp", song_position)
     midi_send_event(SongPositionPointerEvent(15, song_position), drain_output=True)   # works
     #lsb = song_position & 0x7F
     #msb = song_position >> 7
     #midi_send_event(MidiBytesEvent([0xF2, lsb, msb]), drain_output=True)  # works
 
 def control_change():
-    print("control_change")
+    trace("control_change")
     event = ControlChangeEvent(15, 1, 2, tag=47)
     print(f"{event.tick=}")
     midi_send_event(event, drain_output=True)  # works
 
 def time_sig():
-    print("time_sig")
+    trace("time_sig")
     midi_send_event(SystemEvent(0xFD, 42), drain_output=True)  # works
     #midi_send_event(MidiBytesEvent([0xFD, 42]), drain_output=True)  # doesn't work
 
 def clock_test(secs):  # works
-    print("clock_test")
-    start = midi_tick_time()
-    for next in range(start + 10, start + secs * 1000, 10):
-        now = midi_tick_time()
-        if next - now > 5:
-            sleep(0.001 * (next - now - 5))
-        if midi_tick_time() > next:
-            print(f"clock_test: slept too long! {midi_tick_time()=}, {next=}")
+    start = tick_time()
+    trace("clock_test starting at", start)
+    for next in range(start + 10, start + secs * Ppq, Ppc):
+        now = tick_time()
+        if Secs_per_pulse * (next - now) > 0.005:
+            sleep(Secs_per_pulse * (next - now) - 0.005)
+        if tick_time() > next:
+            trace(f"clock_test: slept too long! {tick_time()=}, {next=}")
+        #trace(f"clock_test: sending Clock tick={next}, tag={Tag}")
         midi_send_event(ClockEvent(tick=next, tag=Tag), drain_output=True)
 
 def timer_test(tick):
-    print("timer_test", tick)
+    trace("timer_test", tick)
     if Use_master:
         tag = Tag
     else:
@@ -110,46 +112,65 @@ def timer_test(tick):
     midi_send_event(ClockEvent(tick=tick, tag=tag), drain_output=True)  # works
 
 def send_notes():
-    print("send_notes")
+    trace("send_notes")
     #sleep(1)
 
-    #event_queue_id = Queue.queue_id
-    #event_queue_id = 14   # Produces ALSAError: Invalid argument with or without tick supplied
-    event_queue_id = None  # no queue used, queue_id changed to 253 by ALSA
+    if not Use_master:
+        #event_queue_id = Queue.queue_id
+        #event_queue_id = 14   # Produces ALSAError: Invalid argument with or without tick supplied
+        event_queue_id = None  # no queue used, queue_id changed to 253 by ALSA
 
-    send_queue_id = Queue.queue_id
-    #send_queue_id = 14   # Produces ALSAError: Invalid argument with or without tick supplied
-    #send_queue_id = None  # no queue used, queue_id changed to 253 by ALSA
-    print("using event_queue_id", event_queue_id, "send_queue_id", send_queue_id)
+        send_queue_id = Queue.queue_id
+        #send_queue_id = 14   # Produces ALSAError: Invalid argument with or without tick supplied
+        #send_queue_id = None  # no queue used, queue_id changed to 253 by ALSA
+        trace("using event_queue_id", event_queue_id, "send_queue_id", send_queue_id)
 
-    start = midi_tick_time()
+    start = tick_time()
     for i, note in enumerate(range(60, 65)):
         if False:
-            print("NoteOn", note)
+            trace("NoteOn", note)
             midi_send_event(
               # note, ch, velocity
               NoteOnEvent(note, 1, 40, queue_id=event_queue_id),
               drain_output=True)
             sleep(0.1)
-            print("NoteOff", note)
+            trace("NoteOff", note)
             midi_send_event(
               NoteOffEvent(note, 1, 0, queue_id=event_queue_id),
               drain_output=True)
             sleep(0.4)
         else:  # works
-            print("tick_time", midi_tick_time())
+            trace("tick_time", tick_time())
             tick = Ppq*i + start + Ppq//2
-            print("NoteOn", note, "tick", tick)
-            midi_send_event(
-              # note, ch, velocity
-              NoteOnEvent(note, 1, 40, queue_id=event_queue_id, tick=tick, tag=Tag),
-              queue=send_queue_id)
-            print("NoteOff", note, "tick", tick+Ppq//2)
-            midi_send_event(
-              NoteOffEvent(note, 1, 0, queue_id=event_queue_id, tick=tick+Ppq//2, tag=Tag),
-              queue=send_queue_id,
-              drain_output=True)
+            trace("NoteOn", note, "tick", tick)
+            if Use_master:
+                midi_send_event(
+                  # note, ch, velocity
+                  NoteOnEvent(note, 1, 40, tick=tick, tag=Tag))
+                trace("NoteOff", note, "tick", tick+Ppq//2)
+                midi_send_event(
+                  NoteOffEvent(note, 1, 0, tick=tick+Ppq//2, tag=Tag),
+                  drain_output=True)
+            else:
+                midi_send_event(
+                  # note, ch, velocity
+                  NoteOnEvent(note, 1, 40, queue_id=event_queue_id, tick=tick, tag=Tag),
+                  queue=send_queue_id)
+                trace("NoteOff", note, "tick", tick+Ppq//2)
+                midi_send_event(
+                  NoteOffEvent(note, 1, 0, queue_id=event_queue_id, tick=tick+Ppq//2, tag=Tag),
+                  queue=send_queue_id,
+                  drain_output=True)
             #sleep(1)
+
+Last_time = 0
+def tick_time():
+    global Last_time
+    ans = midi_tick_time()
+    if (ans - Last_time) / Ppq >= 1:   # at 60 bpm -> 1 quarter note/sec
+        trace("tick_time now", ans)
+    Last_time = ans
+    return ans
 
 def sleep(secs):
     if Use_master:
@@ -159,30 +180,32 @@ def sleep(secs):
 
 def run_test():
     try:
+        midi_set_verbose(True)
         init(["Clock Master:Input"] if Use_master else None)
         sleep(1)
         clock()
-        stop()
-        send_continue()
         send_spp(0x1234)  # 4660
         control_change()
         time_sig()
 
-        create_queue(ppq=1000)
+        create_queue(ppq=960)
         queue_set_tempo(beats_per_minute = 60)
         queue_start()
         if not Use_master:
-            print(f"{midi_tick_time()=}")
+            trace(f"{tick_time()=}")
         sleep(0.5)
-        print(f"{midi_tick_time()=}")
+        trace(f"{tick_time()=}")
         clock_test(1)
-        print(f"{midi_tick_time()=}")
-        timer_test(midi_tick_time() + 3000)
-        print(f"{midi_tick_time()=}")
+        trace(f"{tick_time()=}")
+        stop()
+        sleep(0.5)
+        send_continue()
+        timer_test(tick_time() + 3000)
+        trace(f"{tick_time()=}")
         send_notes()
-        print(f"{midi_tick_time()=}")
-        sleep(5)
-        print(f"{midi_tick_time()=}")
+        trace(f"{tick_time()=}")
+        sleep(6)
+        trace(f"{tick_time()=}")
     finally:
         midi_close()
 
