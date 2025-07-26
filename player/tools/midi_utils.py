@@ -11,7 +11,8 @@ Utility:
     data_to_time_sig(data) -> (beats, beat_type), e.g., (6, 8)
     ppq_to_data(ppq) -> data byte for ControlChangeEvent to clock-master
     data_to_ppq(data) -> ppq (30-200 as float)
-    midi_queue_time(queue|queue_name) -> current queue tick value
+    midi_queue_status(queue_name|queue=None) -> QueueStatus
+    midi_queue_time(queue_name|queue=None) -> current queue tick value
     trace(*msgs) # adds truncated time to front
 
     Event_type_names[event.type] -> name
@@ -197,13 +198,19 @@ def ppq_to_data(ppq):
 def data_to_ppq(data):
     return data * 24
 
-def midi_queue_time(queue):
+def midi_queue_status(queue=None):
     if isinstance(queue, str):
         if queue not in Queues:
-            print(f"midi_queue_time got unknown queue, {queue!r}")
+            print(f"midi_queue_status got unknown queue, {queue!r}")
             return None
         queue = Queues[queue]
-    return queue.get_status().tick_time
+    if queue is None:
+        assert Default_queue is not None, f"midi_queue_status: Default_queue is not set"
+        queue = Default_queue
+    return queue.get_status()
+
+def midi_queue_time(queue=None):
+    return midi_queue_status(queue).tick_time
 
 def trace(*msgs):
     r'''adds truncated time to front
