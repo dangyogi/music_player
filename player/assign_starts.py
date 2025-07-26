@@ -45,12 +45,21 @@ class assign_measure:
 
     Assigns the following to measure:
         index - 0 relative index into measures
+        key - attributes.key
+        tempo - direction.tempo
+        volume - direction.volume
+        dynamics - direction.direction_type.dynamics
         sorted_notes - notes sorted by ascending start, decending midi_note
         divisions - brought out in the measure declaring attributes.divisions
-        time - brought out in the measure declaring attributes.time
-        division_per_measure - brought out in the measure declaring both divisions and time
+        divisions_per_16th - brought out in the measure declaring attributes.divisions
+        time - brought out in the measure declaring attributes.time as (beats, beat_type)
+        divisions_per_measure - brought out in the measure declaring both divisions and time
         start - start of measure in divisions from the start of the part.
+        start_spp - start of measure in song position pointer (16th notes)
         duration - duration of measure (greatest note stop time)
+
+    Also assigns the following to notes (that are not ignored):
+        start - start of note in divisions from the start of the part.
     '''
     def __init__(self, measure, index, time_modifications=False, trace=None, trace_no_print=False):
         self.trace = trace
@@ -65,7 +74,6 @@ class assign_measure:
 
     def process_children(self):
         global Measure_start
-        self.measure.start = Measure_start
         self.start = 0
         self.longest = 0
         self.backup_num = 0
@@ -76,6 +84,17 @@ class assign_measure:
                     self.assign_divisions(child.divisions)
                 if hasattr(child, 'time'):
                     self.assign_time(child.time)
+                if hasattr(child, 'key'):
+                    self.measure.key = child.key
+            elif child.name == 'direction':
+                if hasattr(child, 'tempo'):
+                    self.measure.tempo = child.tempo
+                if hasattr(child, 'volume'):
+                    self.measure.volume = child.volume
+                if hasattr(child, 'direction_type'):
+                    for direction_type in child.direction_type:
+                        if direction_type.name == 'dynamics':
+                            self.measure.dynamics = direction_type.value
             elif child.name == 'backup':
                 self.backup_num += 1
                 amount = child.duration
@@ -101,6 +120,8 @@ class assign_measure:
         if self.longest != Divisions_per_measure:
             print(f"Measure {self.number} has incorrect length.  "
                   f"Got {self.longest}, expected {Divisions_per_measure}")
+        self.measure.start = Measure_start
+        self.measure.start_spp = Measure_start // Divisions_per_16th
         self.measure.duration = self.longest
         Measure_start += self.measure.duration
         sorted_notes = [child for child in self.measure.children
@@ -115,12 +136,17 @@ class assign_measure:
         return 
 
     def assign_divisions(self, divisions):
-        global Divisions
+        global Divisions, Divisions_per_16th
         if Divisions is not None and self.trace:
             print(f"Divisions reassigned in measure {self.number} "
                   f"from {Divisions} to {divisions}")
         Divisions = divisions
-        self.measure.divisions = Divisions
+        self.measure.divisions = Divisions      # divisions per quarter note
+        if divisions % 4 != 0:
+            raise AssertionError(f"divisions, {divisions}, not multiple of 4 for SPP "
+                                 f"in measure {self.number}")
+        Divisions_per_16th = Divisions // 4
+        self.measure.divisions_per_16th = Divisions_per_16th
         if self.trace:
             print("Got Divisions", Divisions, "in measure", self.number)
         if Time is not None:
@@ -128,7 +154,7 @@ class assign_measure:
 
     def assign_time(self, time):
         global Time
-        new_time = Fraction(time.beats, time.beat_type)
+        new_time = (time.beats, time.beat_type)
         if Time is not None and self.trace:
             print(f"Time reassigned in measure {self.number} from {Time} to {new_time}")
         Time = new_time
@@ -141,7 +167,7 @@ class assign_measure:
 
     def assign_divisions_per_measure(self):
         global Divisions_per_measure
-        Divisions_per_measure = Divisions * (Time / Quarter_note)
+        Divisions_per_measure = Divisions * (Fraction(*Time) / Quarter_note)
         self.measure.divisions_per_measure = Divisions_per_measure
         if self.trace:
             print("Divisions_per_measure set to", Divisions_per_measure)
@@ -224,9 +250,9 @@ class assign_measure:
 
 
 def assign_parts(parts, time_modification=False, trace=None, trace_no_print=False):
-    global Divisions, Time, Divisions_per_measure, Measure_start
+    global Divisions, Divisions_per_16th, Time, Divisions_per_measure, Measure_start
     for info, measures in parts:
-        Divisions = Time = Divisions_per_measure = None
+        Divisions = Divisions_per_16th = Time = Divisions_per_measure = None
         Measure_start = 0
         for i, measure in enumerate(measures):
             assign_measure(measure, i, time_modification, trace, trace_no_print)

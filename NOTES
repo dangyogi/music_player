@@ -20,8 +20,8 @@ MIDI beat clock
         0xFC Stop: single-byte, Master may continue sending Ticks, but slaves ignore them for
                    advancing the song position
         0xFB Continue: single-byte, resume from last stopped position
-        0xF2 Song Position Pointer: 3-byte, LSB first.  Song position is MIDI beats
-             (16th notes == 6 clock pulses, or 24 ppq)
+        0xF2 Song Position Pointer: 3-byte, LSB first.  Song position is 16th notes from the start of
+             the song.  (16th notes == 6 clock pulses at 24 ppq)
 
         Standard MIDI resolution is 24 ppq
 
@@ -79,3 +79,36 @@ ALSA Queues:
     event_output:
         port may be any port (READ/WRITE/RW); if not None, overrides source in event
         dest must be an input port (WRITE/RW); if not None, overrides dest in event
+
+MIDI Wiring:
+
+    Synth Box:
+        Clock Master:  (runs on same box as synth to reduce latency and jitter to a minimum)
+            Input <- Net Client:Network
+            Timer -> synth:Input, Net Client:Network
+            Output -> synth:Input
+
+        synth:
+            Input <- Clock Master:Timer, Clock Master:Output
+
+        aseqnet (Net Client):
+            Network -> Clock Master:Input, <- Clock Master:Timer
+
+    Exp Console Box:
+        aseqnet (Net Client): (connected to Clock Master:Input and Clock Master:Timer on synth box)
+            Network
+
+        Exp Console:
+            Input <- Net Client:Network (Clock Master:Timer)
+            Output -> Net Client:Network (Clock Master:Input), Exp Recorder:Input, Player:Input
+
+        Exp Recorder:
+            Input <- Exp Console:Output, Net Client:Network (Clock Master:Timer)
+
+        Exp Playback:
+            Timer <- Net Client:Network (Clock Master:Timer)
+            Output -> Exp Console:Input, Player:Input??
+
+        Player:
+            Input <- Exp Console:Output, Net Client:Network (Clock Master:Timer)
+            Output -> Net Client:Network (Clock Master:Input)

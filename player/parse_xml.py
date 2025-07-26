@@ -280,7 +280,7 @@ Notes = {
     'F': 5,
     'G': 7,
     'A': 9,
-    'B': 11, # last not of each octave
+    'B': 11, # last note of each octave
 }
 
 def make_pitch(name, props):

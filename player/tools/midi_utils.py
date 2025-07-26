@@ -20,6 +20,7 @@ Utility:
 Initialization:
 
     midi_set_verbose(verbose=True) -> None
+    midi_raise_SPPException(raise_spp=True) -> None
     midi_init(client_name, streams=DUPLEX) -> client
     midi_create_queue(name, ppq, info=None, default=True) -> Queue (only used by clock_master)
     midi_create_input_port(name, caps=WRITE_PORT, type=DEFAULT_PORT_TYPE, connect_from=None)
@@ -58,6 +59,7 @@ I/O:
                                  No drain_output required on any of these (i.e., if True returned).
                                  Register midi_process_clock_fn rather than midi_process_clock if
                                  that's all you need.
+                                 Raises SPPException if midi_raise_SPPException has been called.
     midi_process_clock_fn(event) -> can be passed to midi_process_fn if no other events require
                                     processing.
 
@@ -119,6 +121,8 @@ SND_SEQ_QUEUE_DIRECT = alsa.SND_SEQ_QUEUE_DIRECT
 #         and 0xF5 for time_signature (data = (beats << 4) | (beat_type >> 1))
 
 Verbose = False
+Raise_SPPException = False
+Spp = None   # set by midi_process_clock, reset by midi_pause if Raise_SPPException is True.
 Tempo_status = 0xF4
 Time_sig_status = 0xF5
 
@@ -159,6 +163,12 @@ Time_signature = None  # (beats, beat_type)
 # data = log(bpm / 30) / log(1.01506)
 # data = log(bpm / 30) / Log_1_01506
 Log_1_01506 = math.log(1.01506)
+
+
+class SppException(Exception):
+    def __init__(self, spp):
+        self.spp = spp
+
 
 def data_to_bpm(data):
     r'''result bpm is rounded to a sensible number of decimals.
@@ -203,6 +213,10 @@ def trace(*msgs):
 def midi_set_verbose(verbose=True):
     global Verbose
     Verbose = verbose
+
+def midi_raise_SPPException(raise_spp=True):
+    global Raise_SPPException
+    Raise_SPPException = raise_spp
 
 def midi_init(client_name, streams=StreamOpenType.DUPLEX):
     r'''Creates Client.  All ports for the client share the same input and output memory pools.
@@ -605,6 +619,7 @@ def midi_pause(secs=None, post_fns=None):
         Sel.register(Client._fd, selectors.EVENT_READ, Process_fn)
 
     def wait_once(secs):
+        global Spp
         drain_output = False
         for sk, sel_event in Sel.select(secs):
             num_pending = Client.event_input_pending(True)
@@ -624,6 +639,10 @@ def midi_pause(secs=None, post_fns=None):
                     drain_output = True
             if drain_output:
                 Client.drain_output()
+        if Spp and Raise_SPPException:
+            spp = Spp
+            Spp = None
+            raise SppException(spp)
 
     if secs is None or secs == 0:
         wait_once(secs)
