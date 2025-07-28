@@ -125,7 +125,7 @@ def process_event(event):
             elif field == 'source':
                 send_port = choices.get('send_port')
                 if send_port is not None:
-                    send_port_addr = midi_address(f"midi-writer:{send_port}")
+                    send_port_addr = midi_address(("midi-writer", send_port))
                     assert send_port_addr is not None
                     if send_port_addr != event_value:
                         print(f"{field} changed: sent {send_port=}, {sent_value=}, "
@@ -133,7 +133,7 @@ def process_event(event):
                         Changed.add(field)
                     continue
                 if sent_value is None:
-                    sent_addr = midi_address(f"midi-writer:0")
+                    sent_addr = midi_address(("midi-writer", 0))
                     assert sent_addr is not None
                     if sent_addr != event_value:
                         print(f"{field} changed: sent {send_port=}, {sent_value=}, got {event_value}")

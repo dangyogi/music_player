@@ -41,20 +41,24 @@ Initialization:
     midi_get_client_info(client_id=None) -> ClientInfo (.name and .client_id useful)
     midi_get_port_info(addr) -> PortInfo (.name, .client_id, .port_id and .capability useful)
     midi_get_address(addr) -> "client_name(client_id):port_name(port_id)", addr may be PortInfo
-    midi_address(address) -> Address or None, client_name:port_name may be used
+    midi_address(address) -> Address or None, "client_name:port_name" or (client, port) may be used
     midi_process_fn(fn) -> None, fn(event) -> bool to drain_output
+    midi_close_queue(name) -> None
     midi_close() -> None, closes tag with clock-master, all ports, queues and client
 
 I/O:
     midi_send_event(event, queue=None, port=None, dest=None, no_defaults=False, drain_output=False)
       -> None
     midi_drain_output() -> None
-    midi_pause(secs=None, post_fns=None) -> None, reads and processes events while paused.
-                                            post_fns should be an empty list that will loaded by
-                                            the fn registered with midi_process_fn with fns to process
-                                            after all events have been received and drain_output has
-                                            been called.  These are called with no arguments and must
-                                            return True if drain_output needs to be called (again).
+    midi_pause(secs=None, to_tick=None, post_fns=None) -> None,
+        reads and processes events while paused.
+        Pauses until the first of secs expires (forever if None), or to_tick is reached on the queue.
+        If to_tick is not None, it will pause forever until the queue is running (not stopped).  The
+        secs parameter, if not None, places an upper limit on this pause.
+        post_fns should be an empty list that will loaded by the fn registered with midi_process_fn
+        with fns to process after all events have been received and drain_output has been called.
+        These are called with no arguments and must return True if drain_output needs to be called
+        (again).
     midi_process_clock(event) -> True if event was a clock event
                                  (Clock, Start, Stop, Continue, tempo, time_signature, spp)
                                  No drain_output required on any of these (i.e., if True returned).
@@ -68,7 +72,7 @@ To interface with the clock-master:
 
     midi_set_tag(tag) -> None, unique identifier for clock-master
     midi_set_ppq(ppq) -> None, sends CC_ppq to clock-master to create a queue
-    midi_close_queue() -> None, sends CC_close_queue to clock-master to close the queue
+    midi_close_cm_queue() -> None, sends CC_close_queue to clock-master to close the queue
     midi_set_tempo(bpm) -> None, sends message to clock-master to set tempo on all queues
     midi_set_time_signature(beats, beat_type) -> None, sends message to clock-master
     midi_start() -> None, sends message to clock-master
@@ -166,7 +170,7 @@ Time_signature = None  # (beats, beat_type)
 Log_1_01506 = math.log(1.01506)
 
 
-class SppException(Exception):
+class SPPException(Exception):
     def __init__(self, spp):
         self.spp = spp
 
@@ -512,44 +516,65 @@ def midi_create_port(name, caps=RW_PORT, type=DEFAULT_PORT_TYPE, default=True, c
 def midi_address(address):
     r'''Returns an Address, or None if address has an unknown name.
 
-    address may be: an Address, Port, PortInfo, "client", "client:port" where client
-    and/or port may be a name or number.
+    address may be: an Address, Port, PortInfo, "client", "client:port", or (client,) or
+    (client, port) where client and/or port may be a name or number.  An omitted client (or "")
+    is taken as this app's client_id.  An omitted port (or "") is taken as 0.
+
+    Client and port names only have to be unique prefixes of the actual client/port names.
     '''
     if isinstance(address, Address):
         return address
     if isinstance(address, (Port, PortInfo)):
         return Address(address)
-    if ':' in address:
+    if isinstance(address, (tuple, list)):
+        if len(address) == 1:
+            client = address[0]
+            port = 0
+        else:
+            client, port = address
+    elif ':' in address:
         client, port = address.split(':')
     else:
         client = address
-        port = '0'
-    if not client:
+        port = 0
+    if client == "":
         client = Client.client_id
-    elif client.isdigit():
+    elif isinstance(client, int) or client.isdigit():
         client = int(client)
     else:
         client_info = None
+        client_id = None
         while True:
             client_info = Client.query_next_client(client_info)
             if client_info is None:
-                print(f"midi_address({address}): client {client} not found")
-                return None
-            if client_info.name == client:
-                client = client_info.client_id
+                if client_id is None:
+                    print(f"midi_address({address}): client {client} not found")
+                    return None
                 break
-    if port.isdigit():
+            if client_info.name.startswith(client):
+                if client_id is not None:
+                    print(f"midi_address: {client=} is not unique")
+                client_id = client_info.client_id
+        client = client_id
+    if port == "":
+        port = 0
+    if isinstance(port, int) or port.isdigit():
         port = int(port)
     else:
         port_info = None
+        port_id = None
         while True:
             port_info = Client.query_next_port(client, port_info)
             if port_info is None:
-                print(f"midi_address({address}): port {port} not found")
-                return None
-            if port_info.name == port:
-                port = port_info.port_id
+                if port_id is None:
+                    print(f"midi_address({address}): port {port} not found")
+                    return None
                 break
+            if port_info.name.startswith(port):
+                if port_id is not None:
+                    print(f"midi_address: {port=} is not unique")
+                port_id = port_info.port_id
+        port = port_id
     return Address(client, port)
 
 def midi_process_fn(fn):
@@ -590,7 +615,7 @@ def midi_send_event(event, queue=None, port=None, dest=None, no_defaults=False, 
             port = Ports[port]
     elif port is None and Default_port and not no_defaults:
         port = Default_port
-    if isinstance(dest, str):
+    if dest is not None:
         addr = midi_address(dest)
         if addr is None:
             print(f"midi_send_event: unknown dest {dest!r} -- not sent!")
@@ -604,8 +629,8 @@ def midi_send_event(event, queue=None, port=None, dest=None, no_defaults=False, 
 def midi_drain_output():
     Client.drain_output()
 
-def midi_pause(secs=None, post_fns=None):
-    r'''Pause secs waiting for events.
+def midi_pause(secs=None, to_tick=None, post_fns=None):
+    r'''Pause secs or to_tick, whichever occurs first, waiting for events.
 
     Calls the process_fn registered with midi_process_fn for each event received. 
 
@@ -613,12 +638,16 @@ def midi_pause(secs=None, post_fns=None):
     quick check), or a (perhaps fractional) number of secs to wait.  If a number is given, the program
     will be suspended for that many seconds (rather than returning when the first event is received).
 
+    If to_tick is None it doesn't factor into how long the pause is.  Otherwise, the pause will end
+    when the queue reaches that tick; even in the face of intervening tempo changes and queue
+    stop/start/continues.
+
     post_fns is a list of functions to call after drain_output is called.  These are called with
     no arguments and must return True if drain_output needs to be called (again).  The caller must
     arrange for this list to also be available to the process_fn registered with midi_process_fn,
-    so that it can append functions to it.  When secs is a number, this list is cleared between
-    each batch of events received.  In that case, the midi_pause caller will see an empty list
-    after the call to midi_pause and not see the functions added by the process_fn.
+    so that it can append functions to it.  This list is cleared between each batch of events
+    received so the midi_pause caller will always see an empty list after the call to midi_pause
+    (and not see the functions added by the process_fn).
     '''
     global Sel
     if Sel is None:
@@ -644,22 +673,38 @@ def midi_pause(secs=None, post_fns=None):
             for fn in post_fns:
                 if fn():
                     drain_output = True
+            post_fns.clear()
             if drain_output:
                 Client.drain_output()
         if Spp and Raise_SPPException:
             spp = Spp
             Spp = None
-            raise SppException(spp)
+            raise SPPException(spp)
 
-    if secs is None or secs == 0:
+    if to_tick is None and (secs is None or secs == 0):
         wait_once(secs)
     else:
-        end = time.clock_gettime(time.CLOCK_MONOTONIC) + secs
-        while secs > 0:
-            wait_once(secs)
-            secs = end - time.clock_gettime(time.CLOCK_MONOTONIC)
-            if post_fns:
-                post_fns.clear()
+        if secs is not None:
+            next_secs = secs
+            end = time.clock_gettime(time.CLOCK_MONOTONIC) + secs
+        def tick_override():
+            if secs is None:
+                while not Queue_running:
+                    wait_once(None)
+            if Queue_running:
+                ticks_remaining = to_tick - midi_tick_time()
+                tick_secs = ticks_remaining * Tick_interval
+                if secs is None or tick_secs < next_secs:
+                    return tick_secs
+            return next_secs
+        if to_tick is not None:
+            next_secs = tick_override()
+        while next_secs > 0:
+            wait_once(next_secs)
+            if secs is not None:
+                next_secs = end - time.clock_gettime(time.CLOCK_MONOTONIC)
+            if to_tick is not None:
+                next_secs = tick_override()
 
 def process_clock(event):
     global Spp, Queue_running, Spp_countdown, Clocks, Last_clock_time
@@ -780,7 +825,7 @@ def midi_send_ppq():
       port=Clock_master_port)
     Client.drain_output()
 
-def midi_close_queue():
+def midi_close_cm_queue():
     Client.event_output(
       ControlChangeEvent(Clock_master_channel, Clock_master_CC_close_queue, Clock_master_tag,
                          tag=Clock_master_tag),
@@ -877,9 +922,16 @@ def midi_tick_time():
     print(f"midi_tick_time: no default queue")
     return 0
 
+def midi_close_queue(name):
+    if name not in Queues:
+        print(f"midi_close_queue: {name=} unknown")
+    else:
+        Queues[name].close()
+        del Queues[name]
+
 def midi_close():
     if Clock_master_tag is not None and Ppq is not None and Clock_master_port is not None:
-        midi_close_queue()
+        midi_close_cm_queue()
     if Sel is not None:
         Sel.close()
     for port in Ports.values():

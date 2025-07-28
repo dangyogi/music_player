@@ -101,8 +101,8 @@ def init():
     Queues["Clock"] = Clock_queue
     midi_create_input_port("Input", connect_from=["Net Client"])
     Immediate_port = midi_create_port("Immediate", caps=PortCaps.READ | PortCaps.WRITE, default=False)
-    Timer_port = midi_create_output_port("Timer", default=False)
-    Output_port = midi_create_output_port("Output", default=False)
+    Timer_port = midi_create_output_port("Timer", default=False, connect_to=["FLUID Synth:0"])
+    Output_port = midi_create_output_port("Output", default=False, connect_to=["FLUID Synth:0"])
     midi_process_fn(process_event)
 
 def process_event(event):
@@ -298,7 +298,7 @@ def process_control_change(event):
             if Verbose:
                 trace(f"process_control_change: CC_ppq {ppq}, creating queue {q_name}")
             if event.tag in Queues:
-                Queues[event.tag].close()
+                midi_close_queue(q_name)
             Queues[event.tag] = midi_create_queue(q_name, ppq, default=False)
             return False
         if event.param == Clock_master_CC_close_queue:
@@ -321,7 +321,8 @@ def process_control_change(event):
 def close_queue(tag):
     if Verbose:
         trace(f"process_control_change: CC_close_queue {tag}, closing queue")
-    Queues[tag].close()
+    q_name = f"Q-{tag}"
+    midi_close_queue(q_name)
     del Queues[tag]
     return False
 
@@ -375,13 +376,9 @@ def send_clocks():
             # min next tick is:
             #   Last_clock_tick_sent + Pulses_per_clock == current_tick + Latency_in_ticks + 1
             wakeup_tick = Last_clock_tick_sent + Pulses_per_clock - Latency_in_ticks
-            # so tick_pause is >= 1
-            tick_pause = wakeup_tick - current_tick
-            if tick_pause <= 0:
-                trace(f"send_clocks got {tick_pause=} <= 0")
-            else:
-                Pause_fn_list = []
-                midi_pause(tick_pause * Secs_per_tick, Pause_fn_list)
+            # so wakeup_tick is > current_tick
+            Pause_fn_list = []
+            midi_pause(to_tick=wakeup_tick, post_fns=Pause_fn_list)
         else:
             Pause_fn_list = []
             midi_pause(post_fns=Pause_fn_list)

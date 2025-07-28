@@ -59,7 +59,7 @@ class assign_measure:
         duration - duration of measure (greatest note stop time)
 
     Also assigns the following to notes (that are not ignored):
-        start - start of note in divisions from the start of the part.
+        start - start of note in divisions from the start of the measure.
     '''
     def __init__(self, measure, index, time_modifications=False, trace=None, trace_no_print=False):
         self.trace = trace
@@ -75,6 +75,7 @@ class assign_measure:
     def process_children(self):
         global Measure_start
         self.start = 0
+        self.last_start = 0
         self.longest = 0
         self.backup_num = 0
         self.forward_num = 0
@@ -213,6 +214,7 @@ class assign_measure:
             if self.number == self.trace:
                 print(f"note {note.note} chord, voice={note.voice}, start={note.start}, "
                       f"duration={note.duration} doesn't count{print_object}")
+            note.start = self.last_start
         elif note.grace:
             if self.number == self.trace:
                 print(f"note {note.note} grace, voice={note.voice}, start={note.start}, "
@@ -242,6 +244,7 @@ class assign_measure:
             self.inc_start(duration)
 
     def inc_start(self, amount):
+        self.last_start = self.start
         self.start += amount
         if self.start.denominator == 1:  # ints have a numerator and denominator too!
             self.start = self.start.numerator

@@ -173,7 +173,7 @@ def get_addrs(client, ports):
         if port is None:
             ans.append(None)
         else:
-            addr = midi_address(f"{client}:{port}")
+            addr = midi_address((client, port))
             assert addr is not None, f"get_source for {port=} got None from midi_address"
             ans.append(addr)
     return ans
