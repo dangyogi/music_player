@@ -52,6 +52,7 @@ Beat clock master:
 import math
 import time
 from functools import partial
+import argparse
 
 from .tools.midi_utils import *
 
@@ -82,7 +83,7 @@ Timer_port = None        # write
 Output_port = None       # write
 Immediate_port = None    # RW, no subs
 Bpm = None
-#Pulses_per_clock = 20   # from midi_utils
+#Pulses_per_clock = 80   # from midi_utils
 Clock_ppq = 24 * Pulses_per_clock
 Latency = 0.005          # keep enough Clocks queued to cover this time
 Latency_in_ticks = None
@@ -178,12 +179,12 @@ def queue(event):
         trace(f"queue: {event.dest=}, {event.tag=}, {event.tick=}; not queued")
     return False
 
-def process_start(event):
+def process_CM_start(event):
     r'''No queuing, queue not running.
     '''
     Pause_fn_list.append(start_queues)
     if Verbose:
-        trace(f"process_start: forwarding event to Timer_port")
+        trace(f"process_CM_start: forwarding event to Timer_port")
     event.tick = 0
     midi_send_event(event, queue=Clock_queue, port=Timer_port)
     return True
@@ -191,19 +192,19 @@ def process_start(event):
 def start_queues():
     global Last_clock_tick_sent, Queue_running
     if Verbose:
-        trace(f"process_start: starting all queues")
+        trace(f"process_CM_start: starting all queues")
     for queue in Queues.values():
         queue.start()
     Queue_running = True
     Last_clock_tick_sent = None
     return True
 
-def process_continue(event):
+def process_CM_continue(event):
     r'''No queuing, queue not running.
     '''
     Pause_fn_list.append(continue_queues)
     if Verbose:
-        trace(f"process_continue: forwarding event to Timer_port")
+        trace(f"process_CM_continue: forwarding event to Timer_port")
     event.tick = 0
     midi_send_event(event, queue=Clock_queue, port=Timer_port)
     return True
@@ -211,23 +212,23 @@ def process_continue(event):
 def continue_queues():
     global Queue_running
     if Verbose:
-        trace(f"process_continue: continuing all queues")
+        trace(f"process_CM_continue: continuing all queues")
     for queue in Queues.values():
         queue.continue_()
     Queue_running = True
     return True
 
-def process_stop(event):
+def process_CM_stop(event):
     r'''May be queued.
     '''
     if Verbose:
-        trace(f"process_stop: queue?")
+        trace(f"process_CM_stop: queue?")
     if not queue(event):
         Pause_fn_list.append(stop_queues)
         if Verbose:
-            trace(f"process_stop: not queued, will stop all queues")
+            trace(f"process_CM_stop: not queued, will stop all queues")
         if Verbose:
-            trace(f"process_stop: forwarding event to Timer_port")
+            trace(f"process_CM_stop: forwarding event to Timer_port")
         event.tick = 0
         midi_send_event(event, queue=Clock_queue, port=Timer_port)
         #now = midi_queue_time(Clock_queue)
@@ -239,38 +240,38 @@ def stop_queues():
     #global Last_clock_tick_sent
     global Queue_running
     if Verbose:
-        trace(f"process_stop: stopping all queues")
+        trace(f"process_CM_stop: stopping all queues")
     for q in Queues.values():
         q.stop()
     Queue_running = False
     return True
 
-def process_songpos(event):
+def process_CM_songpos(event):
     if Verbose:
-        trace(f"process_songpos: queue?")
+        trace(f"process_CM_songpos: queue?")
     if not queue(event):
         if Verbose:
-            trace(f"process_songpos: not queued, forwarding to Timer_port")
+            trace(f"process_CM_songpos: not queued, forwarding to Timer_port")
         event.tick = 0
         midi_send_event(event, queue=Clock_queue, port=Timer_port)
     return True
 
-def process_system(event):
+def process_CM_system(event):
     r'''Tempo (0xF4) and Time_sig (0xF5)
 
     May be queued.
     '''
     if Verbose:
-        trace(f"process_system: got {hex(event.event)}, queue?")
+        trace(f"process_CM_system: got {hex(event.event)}, queue?")
     if not queue(event):
         if event.event == Tempo_status:
             bpm = data_to_bpm(event.result)
             if Verbose:
-                trace(f"process_system: Tempo({bpm}) not queued, will set tempo on all queues")
+                trace(f"process_CM_system: Tempo({bpm}) not queued, will set tempo on all queues")
             Pause_fn_list.append(partial(set_queue_tempos, bpm))
         #elif event.event == Time_sig_status:
         if Verbose:
-            trace(f"process_system: not queued, forwarding to Timer_port")
+            trace(f"process_CM_system: not queued, forwarding to Timer_port")
         event.tick = 0
         midi_send_event(event, queue=Clock_queue, port=Timer_port)
     return True
@@ -278,14 +279,14 @@ def process_system(event):
 def set_queue_tempos(bpm):
     global Bpm
     if Verbose:
-        trace("process_system: setting tempo on all queues to", bpm)
+        trace("process_CM_system: setting tempo on all queues to", bpm)
     Bpm = bpm
     recalc_clock()
     for q in Queues.values():
         q.set_tempo(bpm=bpm, ppq=q.ppq_setting)
     return False
 
-def process_control_change(event):
+def process_CM_control_change(event):
     r'''Set ppq for tag, or close_queue
 
     No queuing done on these.
@@ -296,7 +297,7 @@ def process_control_change(event):
             ppq = data_to_ppq(event.value)
             q_name = f"Q-{event.tag}"
             if Verbose:
-                trace(f"process_control_change: CC_ppq {ppq}, creating queue {q_name}")
+                trace(f"process_CM_control_change: CC_ppq {ppq}, creating queue {q_name}")
             if event.tag in Queues:
                 midi_close_queue(q_name)
             Queues[event.tag] = midi_create_queue(q_name, ppq, default=False)
@@ -305,34 +306,34 @@ def process_control_change(event):
             tag = event.value
             if tag in Queues:
                 if Verbose:
-                    trace(f"process_control_change: CC_close_queue {tag}, will close queue")
+                    trace(f"process_CM_control_change: CC_close_queue {tag}, will close queue")
                 Pause_fn_list.append(partial(close_queue, tag))
             else:
                 if Verbose:
-                    trace(f"process_control_change: CC_close_queue {tag}, unknown queue")
+                    trace(f"process_CM_control_change: CC_close_queue {tag}, unknown queue")
                 trace(f"CC_close_queue: no queue for {tag=}")
             return False
     if Verbose:
-        trace(f"process_control_change: channel={event.channel}, param={event.param}; not mine, "
+        trace(f"process_CM_control_change: channel={event.channel}, param={event.param}; not mine, "
               f"forwarding to Output_port")
     send_event(event)  # this is for somebody else...
     return True
 
 def close_queue(tag):
     if Verbose:
-        trace(f"process_control_change: CC_close_queue {tag}, closing queue")
+        trace(f"process_CM_control_change: CC_close_queue {tag}, closing queue")
     q_name = f"Q-{tag}"
     midi_close_queue(q_name)
     del Queues[tag]
     return False
 
 Event_fns = {
-    EventType.START: process_start,
-    EventType.CONTINUE: process_continue,
-    EventType.STOP: process_stop,
-    EventType.SONGPOS: process_songpos,
-    EventType.SYSTEM: process_system,
-    EventType.CONTROLLER: process_control_change,
+    EventType.START: process_CM_start,
+    EventType.CONTINUE: process_CM_continue,
+    EventType.STOP: process_CM_stop,
+    EventType.SONGPOS: process_CM_songpos,
+    EventType.SYSTEM: process_CM_system,
+    EventType.CONTROLLER: process_CM_control_change,
 }
 
 def recalc_clock():
@@ -373,25 +374,28 @@ def send_clocks():
             #    print()
             if drain_needed:
                 midi_drain_output()
-            # min next tick is:
+            # min next clock tick is:
             #   Last_clock_tick_sent + Pulses_per_clock == current_tick + Latency_in_ticks + 1
             wakeup_tick = Last_clock_tick_sent + Pulses_per_clock - Latency_in_ticks
             # so wakeup_tick is > current_tick
+
             Pause_fn_list = []
-            midi_pause(to_tick=wakeup_tick, post_fns=Pause_fn_list)
+            # Don't use to_tick here because midi_utils doesn't know what we're doing
+            midi_pause((wakeup_tick - current_tick) * Secs_per_tick, post_fns=Pause_fn_list)
         else:
             Pause_fn_list = []
             midi_pause(post_fns=Pause_fn_list)
 
 def run():
-    global Verbose
+    global Verbose, Latency
 
-    import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument('--latency', '-l', type=float, default=0.005)
     parser.add_argument('--verbose', '-v', action="store_true", default=False)
 
     args = parser.parse_args()
     Verbose = args.verbose
+    Latency = args.latency
 
     try:
         if Verbose:

@@ -141,13 +141,13 @@ Clock_master_channel = 15
 Clock_master_CC_ppq = 44          # ppq_data = ppq // 24
 Clock_master_CC_close_queue = 45  # tag
 Clock_master_tag = None
-Pulses_per_clock = 20
+Pulses_per_clock = 80             # gives 1 mSec at 30 bpm
 
 Sel = None
 Client = None
 Ports = {}
 Default_port = None
-Clock_master_port = None
+Clock_master_port = None          # we're running for the clock master if this is None
 Queues = {}
 Default_queue = None
 Process_fn = None      # Process_fn(event) -> bool to drain_output
@@ -184,6 +184,8 @@ def data_to_bpm(data):
     return round(30 * math.exp(Log_1_01506*data), 1)
 
 def bpm_to_data(bpm):
+    r'''Can encode bpm between 30 and 200 inclusive.
+    '''
     return int(round(math.log(bpm / 30) / Log_1_01506))
 
 def time_sig_to_data(beats, beat_type):
@@ -654,13 +656,16 @@ def midi_pause(secs=None, to_tick=None, post_fns=None):
         Sel = selectors.DefaultSelector()
         Sel.register(Client._fd, selectors.EVENT_READ, Process_fn)
 
+    if Verbose:
+        trace(f"midi_pause({secs=}, {to_tick=})")
+
     def wait_once(secs):
         global Spp
         drain_output = False
         for sk, sel_event in Sel.select(secs):
             num_pending = Client.event_input_pending(True)
             for i in range(1, num_pending + 1):
-                #print("reading", i)
+                #trace("reading", i)
                 event = Client.event_input()
                 if sk.data(event):
                     drain_output = True
@@ -690,10 +695,14 @@ def midi_pause(secs=None, to_tick=None, post_fns=None):
         def tick_override():
             if secs is None:
                 while not Queue_running:
+                    if Verbose:
+                        trace(f"tick_override: queue not running, doing wait_once(None)")
                     wait_once(None)
             if Queue_running:
                 ticks_remaining = to_tick - midi_tick_time()
                 tick_secs = ticks_remaining * Tick_interval
+                if Verbose:
+                    trace(f"tick_override: {ticks_remaining=}, {tick_secs=}")
                 if secs is None or tick_secs < next_secs:
                     return tick_secs
             return next_secs
@@ -872,7 +881,7 @@ def midi_stop(tick=None):
         Client.event_output(StopEvent(tag=Clock_master_tag, tick=tick), port=Clock_master_port)
     else:
         if tick:
-            print(f"midi_stop: tick ignored, effective immediately!")
+            trace(f"midi_stop: tick ignored, effective immediately!")
         for queue in Queues.values():
             queue.stop()
     Client.drain_output()
@@ -919,7 +928,7 @@ def midi_tick_time():
         return ans
     if Default_queue is not None:
         return Default_queue.get_status().tick_time
-    print(f"midi_tick_time: no default queue")
+    trace(f"midi_tick_time: no default queue, returning 0")
     return 0
 
 def midi_close_queue(name):

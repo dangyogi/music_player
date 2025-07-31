@@ -301,37 +301,57 @@ Chord = Parser("chord", lambda name, prop: (name, True))
 Rest = Parser("rest", lambda name, prop: (name, True),
               ignore="display-step display-octave".split())
 
+# behind note to extend duration by 1/2
 Dot = Parser("dot", lambda name, prop: (name, True))
+
 Cue = Parser("cue", lambda name, prop: (name, True))
 
+# type: start, stop
 Tie = Parser("tie", lambda name, prop: (name, prop['type']),
              save="attr-type".split(),
              list=True)
 
+# type: start, stop
 Tied = Parser("tied", lambda name, prop: (name, prop['type']),
               save="attr-type".split(),
               list=True)
 
+# type: start, stop; number: 1
 Slur = Parser("slur", as_class(Attrs),
               ignore="attr-placement".split(),
               save="attr-type attr-number".split())
 
+# type: up, down (up is like a caret over the top of the note, down is like V under the note)
+# called "mercato", meaning hammered.  As loud as accent, and as short as staccato.
 Strong_accent = Parser("strong-accent", lambda name, prop: (name, prop['type']),
                        save="attr-type".split())
 
+# dot above or below the note, shorten not quite in half
 Staccato = Parser("staccato", lambda name, prop: (name, True))
+
+# > above or below note: strong emphasis
 Accent = Parser("accent", lambda name, prop: (name, True))
+
+# shows as both a staccato and a tenuto mark in La Campanella.
 Detached_legato = Parser("detached-legato", lambda name, prop: (name, True))
+
+# solid triangle above the note.  The note is cut off even faster than staccato
 Staccatissimo = Parser("staccatissimo", lambda name, prop: (name, True))
+
+# a thin bar over/under the note.  Opposite of staccato, let it ring for full duration before moving on
+# to next note.
 Tenuto = Parser("tenuto", lambda name, prop: (name, True))
 
 Articulations = Parser("articulations", as_class(Attrs),
                        children=(Strong_accent, Accent, Staccato, Detached_legato, Staccatissimo,
                                  Tenuto))
 
+# vertical sqwiggle line next to a chord.  Marked on each note.
 Arpeggiate = Parser("arpeggiate", lambda name, prop: (name, True),
                     ignore="attr-default-x attr-default-y attr-relative-x attr-relative-y".split())
 
+# type: inverted, upright
+# eyeball, meaning pause, when placed over a note, hold note longer (1.5 to even twice as long is common)
 Fermata = Parser("fermata", lambda name, prop: (name, prop['type']),
                  save="attr-type".split())
 
@@ -340,17 +360,19 @@ Trill_mark = Parser("trill-mark", lambda name, prop: (name, True))
 Ornaments = Parser("ornaments", as_class(Attrs),
                    children=(Trill_mark,))
 
+# type: start, stop; bracket: yes, no; show-number: none
 Tuplet = Parser("tuplet", as_class(Attrs),
                 save="attr-type attr-bracket attr-show-number".split())
 
 Notations = Parser("notations", as_class(Attrs),
                    children=(Tied, Slur, Articulations, Arpeggiate, Fermata, Ornaments, Tuplet))
 
-# (e.g., quarter, eighth, 16th)
+# (e.g., half, quarter, eighth, 16th, 32nd, 64th)
 Type = Parser("type", as_prop(),
               ignore="attr-size".split(),
               save="text".split())
 
+# slash: yes (or missing)
 Grace = Parser("grace", as_class(Attrs),
                save="attr-slash".split())
 
@@ -490,14 +512,18 @@ Forward = Parser("forward", as_class(Attrs),
                  save="duration".split(),
                  list=True)
 
+# direction: forward, backward
 Repeat = Parser("repeat", lambda name, prop: (name, prop['direction']),
                 save="attr-direction".split())
 
+# number: 1, 2; type: start, stop
 Ending = Parser("ending", as_class(Attrs),
                 ignore="attr-default-x attr-default-y attr-relative-x attr-relative-y".split(),
                 save="attr-number attr-type".split(),
                )
 
+# location: left, right
+# bar-style: heavy-light, light-heavy, light-light, none
 Barline = Parser("barline", as_class(Attrs),
                  save="attr-location bar-style".split(),
                  children=(Repeat, Ending),
