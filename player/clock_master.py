@@ -340,8 +340,8 @@ def recalc_clock():
     global Secs_per_tick, Latency_in_ticks
     Secs_per_tick = 60 / (Bpm * Clock_ppq)
     Latency_in_ticks = int(math.ceil(Latency / Secs_per_tick))
-    if Verbose:
-        trace(f"recalc_clock: {Secs_per_tick=}, {Latency_in_ticks=}")
+    #if Verbose:
+    trace(f"recalc_clock: {Bpm=}, {Clock_ppq=}, {Secs_per_tick=}, {Latency_in_ticks=}")
 
 
 def send_clocks():

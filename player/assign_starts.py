@@ -107,6 +107,7 @@ class assign_measure:
                     self.start = 0
                 else:
                     self.start -= amount
+                self.last_start = self.start
             elif child.name == 'forward':
                 self.forward_num += 1
                 amount = child.duration
@@ -127,13 +128,49 @@ class assign_measure:
         Measure_start += self.measure.duration
         sorted_notes = [child for child in self.measure.children
                                if child.name == 'note' and not child.ignore]
-        sorted_notes.sort(key=lambda note: (note.start, -note.midi_note))
+        # ascending start, descending midi_note, descending duration
+        sorted_notes.sort(key=lambda note: (note.start, -note.midi_note,
+                                            -10000 if note.grace is not None
+                                                   else -note.duration))
+        start_len = len(sorted_notes)
+        if self.number == self.trace:
+            print(f"measure({self.number}) sorted_notes before de-dup:")
+            for note in sorted_notes:
+                print(f"  note {note.note}, midi_note={note.midi_note}, voice={note.voice}, "
+                      f"start={note.start}, duration={note.duration}, tie={note.tie}")
+        i = 0
+        while i + 1 < len(sorted_notes):
+            assert sorted_notes[i].start <= sorted_notes[i + 1].start, \
+                   f"sorted_notes sort failed, measure={self.number}, note={sorted_notes[i].note}" \
+                   f"first start={sorted_notes[i].start}, second start={sorted_notes[i + 1].start}"
+            if sorted_notes[i].start == sorted_notes[i + 1].start:
+                assert sorted_notes[i].midi_note >= sorted_notes[i + 1].midi_note, \
+                       f"sorted_notes sort failed, measure={self.number}, note={sorted_notes[i].note}" \
+                       f"first midi_note={sorted_notes[i].midi_note}, " \
+                       f"second start={sorted_notes[i + 1].midi_note}"
+                if sorted_notes[i].midi_note == sorted_notes[i + 1].midi_note:
+                    assert sorted_notes[i].duration >= sorted_notes[i + 1].duration, \
+                           f"sorted_notes sort failed, measure={self.number}, " \
+                           f"note={sorted_notes[i].note}" \
+                           f"first duration={sorted_notes[i].duration}, " \
+                           f"second duration={sorted_notes[i + 1].duration}"
+                    if sorted_notes[i].duration == sorted_notes[i + 1].duration:
+                        print(f"process_children(measure={self.number}): "
+                              f"two {sorted_notes[i].note} notes "
+                              f"with same start={sorted_notes[i].start} "
+                              f"and duration={sorted_notes[i].duration}")
+                    del sorted_notes[i + 1]
+                    continue
+            i += 1
+        end_len = len(sorted_notes)
+        if start_len != end_len:
+            print(f"process_children(measure={self.number}): deleted {start_len - end_len} dup notes")
         self.measure.sorted_notes = sorted_notes
         if self.number == self.trace:
-            print(f"measure({self.number}) sorted_notes:")
+            print(f"measure({self.number}) sorted_notes after de-dup:")
             for note in sorted_notes:
-                print(f"  note {note.note}, voice={note.voice}, start={note.start}, "
-                      f"duration={note.duration}, tie={note.tie}")
+                print(f"  note {note.note}, midi_note={note.midi_note}, voice={note.voice}, "
+                      f"start={note.start}, duration={note.duration}, tie={note.tie}")
         return 
 
     def assign_divisions(self, divisions):
@@ -211,10 +248,10 @@ class assign_measure:
             return
         note.start = self.start
         if note.chord:
+            note.start = self.last_start
             if self.number == self.trace:
                 print(f"note {note.note} chord, voice={note.voice}, start={note.start}, "
                       f"duration={note.duration} doesn't count{print_object}")
-            note.start = self.last_start
         elif note.grace:
             if self.number == self.trace:
                 print(f"note {note.note} grace, voice={note.voice}, start={note.start}, "

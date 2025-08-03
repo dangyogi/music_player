@@ -45,18 +45,26 @@ def read_musicxml(music_file):
     tie_parts(new_parts)
     return new_parts
 
-def send_parts(parts, measure_number):
+def send_parts(parts, first_measure, last_measure, bpm, measure_number):
     for info, measures in parts:
         print("part", info.id)
-        send_measures(measures, measure_number)
+        send_measures(measures, first_measure, last_measure, bpm, measure_number)
 
-def send_measures(measures, measure_number):
+def send_measures(measures, first_measure, last_measure, bpm, measure_number):
     global Final_tick, Tick_offset
 
-    i = 0
-    send_info(measures[0])
+    send_info(measures[0], bpm)
     spp_division = None
     notes_played = 0
+    i = 0
+    if first_measure is not None:
+        for i, measure in enumerate(measures):
+            #print(f"send_measure got {measure.number!r}, looking for {first_measure!r}")
+            if str(measure.number) == first_measure:
+                Tick_offset = round(measure.start * Ticks_per_division)
+                break
+        else:
+            raise ValueError(f"send_measures: first_measure={first_measure} not found")
     midi_start()
     while i < len(measures):
         try:
@@ -81,10 +89,12 @@ def send_measures(measures, measure_number):
                 i -= 1
             Final_tick = 0
         else:
+            if last_measure is not None and str(measures[i].number) == last_measure:
+                break
             i += 1
     print("total notes played", notes_played)
 
-def send_info(first_measure):
+def send_info(first_measure, bpm):
     global Tempo, Divisions, Divisions_per_16th, Divisions_per_measure
     global Ticks_per_division, Tick_latency
 
@@ -96,7 +106,10 @@ def send_info(first_measure):
         print(f"  key_sig: fifths={key.fifths}")
     print(f"  time_sig={first_measure.time}")
     midi_set_time_signature(*first_measure.time)
-    Tempo = first_measure.tempo
+    if bpm is None:
+        Tempo = first_measure.tempo
+    else:
+        Tempo = bpm
     print(f"  tempo={Tempo}")
     midi_set_tempo(Tempo)
     print(f"  volume={first_measure.volume}")
@@ -135,19 +148,26 @@ def send_notes(measure, starting_division):
         #midi_set_time_signature(time_sig)
     if drain_output:
         midi_drain_output()
-    print("  notes played:", notes_played)
+    if Verbose:
+        print("  notes played:", notes_played)
     return notes_played
 
 def play(note, measure_start, drain_output):
     r'''Caller needs to do midi_drain_output().
     '''
     global Final_tick
+
     start_tick = round((note.start + measure_start) * Ticks_per_division) - Tick_offset
+    if note.grace is not None:
+        # FIX
+        trace(f"play: skipping grace note; note={note.note}, {start_tick=}")
+        return
     end_tick = round((note.start + measure_start + note.duration) * Ticks_per_division) - Tick_offset
     current_tick = midi_tick_time()
     trigger_tick = start_tick - Tick_latency
-    trace(f"play: note={note.note}, {start_tick=}, duration={note.duration}, {end_tick=}, "
-          f"{current_tick=}, {trigger_tick=}")
+    if Verbose:
+        trace(f"play: note={note.note}, {start_tick=}, duration={note.duration}, {end_tick=}, "
+              f"{current_tick=}, {trigger_tick=}")
     if current_tick < trigger_tick:
         if drain_output:
             midi_drain_output()
@@ -169,6 +189,8 @@ def run():
     parser.add_argument('--latency', '-l', type=float, default=0.005)
     parser.add_argument('--verbose', '-v', action="store_true", default=False)
     parser.add_argument('--measure', '-m', default=None)
+    parser.add_argument('--range', '-r', default="", help="start_measure-end_measure")
+    parser.add_argument('--bpm', '-b', type=int, default=None)
     parser.add_argument("music_file")
 
     args = parser.parse_args()
@@ -178,9 +200,14 @@ def run():
     try:
         init(args.tag, args.ppq, args.latency, args.verbose)
         parts = read_musicxml(args.music_file)
-        send_parts(parts, args.measure)
+        if args.range:
+            first_measure, last_measure = args.range.split('-')
+        else:
+            first_measure = last_measure = None
+        send_parts(parts, first_measure, last_measure, args.bpm, args.measure)
     finally:
-        midi_pause(to_tick=Final_tick + 2)  # give queue a chance to drain before killing it
+        if Final_tick:
+            midi_pause(to_tick=Final_tick + 2)  # give queue a chance to drain before killing it
         midi_close()
 
 
