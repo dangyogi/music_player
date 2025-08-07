@@ -38,11 +38,14 @@ Initialization:
     midi_connect_to(port, addr) -> None
     midi_connect_from(port, addr) -> None
     midi_list_ports() -> List[PortInfo]
+    midi_get_client_id() -> Client.client_id
     midi_get_client_info(client_id=None) -> ClientInfo (.name and .client_id useful)
     midi_get_port_info(addr) -> PortInfo (.name, .client_id, .port_id and .capability useful)
     midi_get_address(addr) -> "client_name(client_id):port_name(port_id)", addr may be PortInfo
     midi_address(address) -> Address or None, "client_name:port_name" or (client, port) may be used
-    midi_process_fn(fn) -> None, fn(event) -> bool to drain_output
+    midi_process_fn(fn) -> None, must be called prior to first call to midi_pause.
+                    fn(event) -> bool to drain_output
+    midi_get_named_queue(name) -> Queue
     midi_close_queue(name) -> None
     midi_close() -> None, closes tag with clock-master, all ports, queues and client
 
@@ -128,8 +131,8 @@ SND_SEQ_QUEUE_DIRECT = alsa.SND_SEQ_QUEUE_DIRECT
 Verbose = False
 Raise_SPPException = False
 Spp = None   # set by midi_process_clock, reset by midi_pause if Raise_SPPException is True.
-Tempo_status = 0xF4
-Time_sig_status = 0xF5
+Tempo_status = 0xF4     # 244
+Time_sig_status = 0xF5  # 245
 
 # Event_type_names[event.type] -> name
 Event_type_names = {e_value.value: e_value.name for e_value in EventType}
@@ -399,6 +402,9 @@ def midi_connect_from(port, addr):
 
 def midi_list_ports():
     return Client.list_ports()
+
+def midi_get_client_id():
+    return Client.client_id
 
 def midi_get_client_info(client_id=None):
     r'''Returns ALSA ClientInfo.
@@ -835,6 +841,8 @@ def midi_send_ppq():
     Client.drain_output()
 
 def midi_close_cm_queue():
+    if Verbose:
+        trace("midi_close_cm_queue")
     Client.event_output(
       ControlChangeEvent(Clock_master_channel, Clock_master_CC_close_queue, Clock_master_tag,
                          tag=Clock_master_tag),
@@ -931,22 +939,41 @@ def midi_tick_time():
     trace(f"midi_tick_time: no default queue, returning 0")
     return 0
 
+def midi_get_named_queue(name):
+    if name in Queues:
+        return Queues[name]
+    return Client.get_named_queue(name)
+
 def midi_close_queue(name):
     if name not in Queues:
-        print(f"midi_close_queue: {name=} unknown")
+        trace(f"midi_close_queue: {name=} unknown -- ignored")
     else:
+        if Verbose:
+            trace(f"midi_close_queue, {name=}, {Queues[name]=}")
         Queues[name].close()
         del Queues[name]
 
 def midi_close():
+    if Verbose:
+        trace("midi_close")
     if Clock_master_tag is not None and Ppq is not None and Clock_master_port is not None:
         midi_close_cm_queue()
     if Sel is not None:
+        if Verbose:
+            trace("midi_close: closing Selector")
         Sel.close()
+    if Verbose and Ports:
+        trace("midi_close: closing ports")
     for port in Ports.values():
         port.close()
+    if Verbose and Queues:
+        trace("midi_close: closing queues")
     for queue in Queues.values():
         queue.close()
     if Client is not None:
+        if Verbose:
+            trace("midi_close: closing Client")
         Client.close()
+    if Verbose:
+        trace("midi_close: done!")
 

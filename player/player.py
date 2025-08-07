@@ -141,9 +141,8 @@ def send_notes(measure, starting_division):
                 starting_division = None
             else:
                 continue
-        play(note, measure.start, drain_output)
+        notes_played += play(note, measure.start, drain_output)
         drain_output = True
-        notes_played += 1
         #midi_set_tempo(bpm)
         #midi_set_time_signature(time_sig)
     if drain_output:
@@ -161,7 +160,7 @@ def play(note, measure_start, drain_output):
     if note.grace is not None:
         # FIX
         trace(f"play: skipping grace note; note={note.note}, {start_tick=}")
-        return
+        return 0
     end_tick = round((note.start + measure_start + note.duration) * Ticks_per_division) - Tick_offset
     current_tick = midi_tick_time()
     trigger_tick = start_tick - Tick_latency
@@ -177,6 +176,7 @@ def play(note, measure_start, drain_output):
     midi_send_event(note_off)
     if end_tick > Final_tick:
         Final_tick = end_tick
+    return 1
 
 def prepare_note(note, start_tick, end_tick):
     return (NoteOnEvent(note.midi_note, 0, 43, tick=start_tick, tag=Tag),
@@ -208,6 +208,8 @@ def run():
     finally:
         if Final_tick:
             midi_pause(to_tick=Final_tick + 2)  # give queue a chance to drain before killing it
+        midi_stop()
+        midi_pause(0.5)  # give queue a chance to drain before killing it
         midi_close()
 
 

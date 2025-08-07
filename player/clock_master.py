@@ -99,6 +99,7 @@ def init():
 
     midi_init("Clock Master")
     Clock_queue = midi_create_queue("Clock", Clock_ppq, default=False)
+    trace(f"Client_id={midi_get_client_id()}, Clock_queue={Clock_queue.queue_id}")
     Queues["Clock"] = Clock_queue
     midi_create_input_port("Input", connect_from=["Net Client"])
     Immediate_port = midi_create_port("Immediate", caps=PortCaps.READ | PortCaps.WRITE, default=False)
@@ -190,12 +191,14 @@ def process_CM_start(event):
     return True
 
 def start_queues():
-    global Last_clock_tick_sent, Queue_running
+    global Last_clock_tick_sent, Queue_running, Clocks_sent
     if Verbose:
         trace(f"process_CM_start: starting all queues")
+    Clocks_sent = 0
     for queue in Queues.values():
         queue.start()
     Queue_running = True
+    trace("START")
     Last_clock_tick_sent = None
     return True
 
@@ -216,6 +219,7 @@ def continue_queues():
     for queue in Queues.values():
         queue.continue_()
     Queue_running = True
+    trace("CONTINUE")
     return True
 
 def process_CM_stop(event):
@@ -228,7 +232,7 @@ def process_CM_stop(event):
         if Verbose:
             trace(f"process_CM_stop: not queued, will stop all queues")
         if Verbose:
-            trace(f"process_CM_stop: forwarding event to Timer_port")
+            trace(f"process_CM_stop: forwarding event out Timer_port")
         event.tick = 0
         midi_send_event(event, queue=Clock_queue, port=Timer_port)
         #now = midi_queue_time(Clock_queue)
@@ -241,10 +245,14 @@ def stop_queues():
     global Queue_running
     if Verbose:
         trace(f"process_CM_stop: stopping all queues")
-    for q in Queues.values():
-        q.stop()
-    Queue_running = False
-    return True
+    if Queue_running:
+        for q in Queues.values():
+            q.stop()
+        Queue_running = False
+        events = midi_queue_status(Clock_queue).events
+        trace(f"STOP: sent {Clocks_sent - events} CLOCKs, not counting {events} still queued")
+        return True
+    return False
 
 def process_CM_songpos(event):
     if Verbose:
@@ -278,8 +286,8 @@ def process_CM_system(event):
 
 def set_queue_tempos(bpm):
     global Bpm
-    if Verbose:
-        trace("process_CM_system: setting tempo on all queues to", bpm)
+    #if Verbose:
+    trace("process_CM_system: setting tempo on all queues to", bpm)
     Bpm = bpm
     recalc_clock()
     for q in Queues.values():
@@ -327,7 +335,7 @@ def close_queue(tag):
     del Queues[tag]
     return False
 
-Event_fns = {
+Event_fns = {   # These are given different names than the ones in midi_utils to avoid conflicts
     EventType.START: process_CM_start,
     EventType.CONTINUE: process_CM_continue,
     EventType.STOP: process_CM_stop,
@@ -345,7 +353,7 @@ def recalc_clock():
 
 
 def send_clocks():
-    global Last_clock_tick_sent, Pause_fn_list
+    global Last_clock_tick_sent, Pause_fn_list, Clocks_sent
 
     if Verbose:
         trace(f"send_clocks")
@@ -367,6 +375,7 @@ def send_clocks():
                 #    trace("send_clocks sending tick", tick)
                 midi_send_event(ClockEvent(tick=tick, queue_id=Clock_queue.queue_id),
                                 port=Timer_port)
+                Clocks_sent += 1
                 #if Verbose:
                 #    print('.', end='')
                 drain_needed = True
@@ -404,7 +413,9 @@ def run():
         time.sleep(1)
         send_clocks()
     finally:
+        trace("run finally clause: calling midi_close")
         midi_close()
+        trace("run finally clause: done, bye!")
 
 
 
