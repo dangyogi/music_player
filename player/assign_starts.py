@@ -60,6 +60,8 @@ class assign_measure:
 
     Also assigns the following to notes (that are not ignored):
         start - start of note in divisions from the start of the measure.
+        chord_down - note number in chord counting from highest to lowest pitch, None if not in chord
+        chord_up - note number in chord counting from lowest to highest pitch, None if not in chord
     '''
     def __init__(self, measure, index, time_modifications=False, trace=None, trace_no_print=False):
         self.trace = trace
@@ -119,6 +121,38 @@ class assign_measure:
                 self.inc_start(amount)
             elif child.name == 'note':
                 self.assign_start(child)
+                child.chord_down = child.chord_up = None
+
+                # process ties, this sets child.ignore on all but first note in tie.
+                # This gets done before sorting the notes, so that tied notes are excluded.
+                if 'start' in child.tie and 'stop' not in child.tie:
+                    if child.note in First_tie_notes:
+                        print(f"process_children: duplicate tie start for note {child.note} "
+                              f"in measure {self.number}")
+                    First_tie_notes[child.note] = child
+                else:
+                    if child.note in First_tie_notes:
+                        if 'stop' not in child.tie:
+                            print(f"process_children: missing tie stop for note {child.note} "
+                                  f"in measure {self.number}")
+                        else:
+                            First_tie_notes[child.note].duration += child.duration
+                            if self.number == self.trace:
+                                print(f"process_children: adding tied {child.duration} "
+                                      f"for {child.note} from measure {self.number}, "
+                                      f"First_tie_notes.duration now "
+                                      f"{First_tie_notes[child.note].duration}")
+                            child.ignore = True
+                    elif 'stop' in child.tie:
+                        print(f"process_children: unpaired tie stop for note {child.note} "
+                              f"in measure {self.number}")
+                    if 'stop' in child.tie and 'start' not in child.tie:
+                        if child.note not in First_tie_notes:
+                            print(f"process_children: got unmatched tie 'stop' "
+                                  f"for {child.note} in measure {self.number}, "
+                                  f"First_tie_notes: {list(First_tie_notes.keys())}")
+                        else:
+                            del First_tie_notes[child.note]
         if self.longest != Divisions_per_measure:
             print(f"Measure {self.number} has incorrect length.  "
                   f"Got {self.longest}, expected {Divisions_per_measure}")
@@ -126,6 +160,7 @@ class assign_measure:
         self.measure.start_spp = Measure_start // Divisions_per_16th
         self.measure.duration = self.longest
         Measure_start += self.measure.duration
+
         sorted_notes = [child for child in self.measure.children
                                if child.name == 'note' and not child.ignore]
         # ascending start, descending midi_note, descending duration
@@ -139,6 +174,7 @@ class assign_measure:
                 print(f"  note {note.note}, midi_note={note.midi_note}, voice={note.voice}, "
                       f"start={note.start}, duration={note.duration}, tie={note.tie}")
         i = 0
+        first_note = None
         while i + 1 < len(sorted_notes):
             assert sorted_notes[i].start <= sorted_notes[i + 1].start, \
                    f"sorted_notes sort failed, measure={self.number}, note={sorted_notes[i].note}" \
@@ -159,9 +195,29 @@ class assign_measure:
                               f"two {sorted_notes[i].note} notes "
                               f"with same start={sorted_notes[i].start} "
                               f"and duration={sorted_notes[i].duration}")
+                    print(f"process_children(measure={self.number}) deleting dup note "
+                          f"{sorted_notes[i + 1].note}, duration={sorted_notes[i + 1].duration}")
                     del sorted_notes[i + 1]
                     continue
+                if first_note is None:
+                    first_note = i
+            else:
+                if first_note is not None:
+                    # i is last note
+                    chord = sorted_notes[first_note: i + 1]
+                    for n, note in enumerate(chord):
+                        note.chord_down = n
+                    for n, note in enumerate(reversed(chord)):
+                        note.chord_up = n
+                    first_note = None
             i += 1
+        if first_note is not None:
+            # chord goes to end
+            chord = sorted_notes[first_note:]
+            for n, note in enumerate(chord):
+                note.chord_down = n
+            for n, note in enumerate(reversed(chord)):
+                note.chord_up = n
         end_len = len(sorted_notes)
         if start_len != end_len:
             print(f"process_children(measure={self.number}): deleted {start_len - end_len} dup notes")
@@ -290,10 +346,11 @@ class assign_measure:
 
 
 def assign_parts(parts, time_modification=False, trace=None, trace_no_print=False):
-    global Divisions, Divisions_per_16th, Time, Divisions_per_measure, Measure_start
+    global Divisions, Divisions_per_16th, Time, Divisions_per_measure, Measure_start, First_tie_notes
     for info, measures in parts:
         Divisions = Divisions_per_16th = Time = Divisions_per_measure = None
         Measure_start = 0
+        First_tie_notes = {}
         for i, measure in enumerate(measures):
             assign_measure(measure, i, time_modification, trace, trace_no_print)
         part_duration = Measure_start / Divisions  # in beats (quarter notes)

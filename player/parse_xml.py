@@ -380,8 +380,10 @@ Time_modification = Parser("time-modification", as_class(Attrs),
                            save="actual-notes normal-notes".split())
 
 class Note:
+    id = None
     note = None
     pitch = None
+    color = None
     chord = False
     rest = False
     dot = False
@@ -392,6 +394,8 @@ class Note:
     notations = None
     ignore = False
 
+    # id: unique for whole file
+    # color: #RRGGBB
     # dynamics: volume e.g., 58.89
     # print-object: e.g., no (ignore these!)
     # duration: in quarter-note/divisions
@@ -446,9 +450,9 @@ class Note:
                 if value.alter == 0:
                     self.note = f"{value.step}{value.octave}"
                 elif value.alter > 0:
-                    self.note = f"{value.step}{value.octave}+{value.alter}"
+                    self.note = f"{value.step}{value.octave}{'#' * value.alter}"
                 elif value.alter < 0:
-                    self.note = f"{value.step}{value.octave}{value.alter}"
+                    self.note = f"{value.step}{value.octave}{'b' * value.alter}"
                 else:
                     print("note got unknown alter", value.alter)
                     self.note = f"{value.step}{value.octave}+?"
@@ -500,7 +504,7 @@ class Note:
 
 Notexml = Parser("note", as_class(Note),
               ignore="attr-default-x attr-default-y accidental stem beam".split(),
-              save="attr-dynamics attr-print-object duration voice staff".split(),
+              save="attr-id attr-dynamics attr-color attr-print-object duration voice staff".split(),
               children=(Pitch, Type, Chord, Rest, Tie, Dot, Cue, Grace, Time_modification, Notations),
               list=True)
 
@@ -537,6 +541,7 @@ class Measure:
 
     # number: measure number, starting at 1
     # attributes: divisions (per quarter note), staves
+    #   These are pulled out in the attributes list, as well as in children
     #   key: fifths (positive for #sharps, negative for #flats),
     #        mode (e.g., major, minor, dorian, phrygian; default major for fifths >= 0, else minor)
     #   time: beats (e.g., 2), beat-type (e.g., 4)
@@ -562,9 +567,12 @@ class Measure:
         self.trace = trace
         self.name = name
         self.number = properties['number']
+        self.attributes = []
         children = []
         for type in "attributes direction backup forward note barline".split():
             if type in properties:
+                if type == "attributes":
+                    self.attributes.extend(properties[type])
                 for child in properties[type]:
                     child.measure_number = self.number
                     #if type == 'note' and hasattr(child, 'print_object') and child.print_object == 'no':

@@ -13,3 +13,5 @@ music_player.egg-info/
 # vim files
 .*.swp
 
+# Excel files
+*.xlsx

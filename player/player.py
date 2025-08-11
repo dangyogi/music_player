@@ -6,7 +6,6 @@ import argparse
 from .parse_xml import parse
 from .unroll_repeats import unroll_parts
 from .assign_starts import assign_parts
-from .tie_notes import tie_parts
 
 from .tools.midi_utils import *
 
@@ -42,7 +41,6 @@ def read_musicxml(music_file):
     parts = parse(music_file)
     new_parts = unroll_parts(parts)
     assign_parts(new_parts)
-    tie_parts(new_parts)
     return new_parts
 
 def send_parts(parts, first_measure, last_measure, bpm, measure_number):
