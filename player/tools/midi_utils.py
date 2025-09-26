@@ -13,6 +13,7 @@ Utility:
     data_to_ppq(data) -> ppq (30-200 as float)
     midi_queue_status(queue_name|queue=None) -> QueueStatus
     midi_queue_time(queue_name|queue=None) -> current queue tick value
+    fraction(n, d)  # returns int if Fraction(n, d).denomintor == 1
     trace(*msgs) # adds truncated time to front
 
     Event_type_names[event.type] -> name
@@ -55,9 +56,16 @@ I/O:
     midi_drain_output() -> None
     midi_pause(secs=None, to_tick=None, post_fns=None) -> None,
         reads and processes events while paused.
-        Pauses until the first of secs expires (forever if None), or to_tick is reached on the queue.
-        If to_tick is not None, it will pause forever until the queue is running (not stopped).  The
-        secs parameter, if not None, places an upper limit on this pause.
+
+        If to_tick is None, just does a select(secs) and returns when the first event(s) are received
+        (after processing them).  So secs == 0 does a quick check, secs == None, waits forever, other
+        secs waits up to that long for the first event(s).
+
+        If to_tick is not None, the pause will end when the queue reaches that tick; even in the face
+        of intervening tempo changes and queue stop/start/continues.  If the Queue is not running, it
+        will only wait up to secs seconds for the Queue to start runing.  Once the Queue is running,
+        secs is ignored.
+
         post_fns should be an empty list that will loaded by the fn registered with midi_process_fn
         with fns to process after all events have been received and drain_output has been called.
         These are called with no arguments and must return True if drain_output needs to be called
@@ -88,6 +96,7 @@ To interface with the clock-master:
 import time
 import math
 import selectors
+from fractions import Fraction
 
 from alsa_midi import (
    SequencerClient, Port, PortInfo, PortCaps, READ_PORT, WRITE_PORT, RW_PORT,
@@ -173,7 +182,10 @@ Time_signature = None  # (beats, beat_type)
 Log_1_01506 = math.log(1.01506)
 
 
-class SPPException(Exception):
+class WakeUpException(Exception):
+    pass
+
+class SPPException(WakeUpException):
     def __init__(self, spp):
         self.spp = spp
 
@@ -183,8 +195,8 @@ def data_to_bpm(data):
     '''
     raw = 30 * math.exp(Log_1_01506*data)
     if raw >= 67:
-        return round(30 * math.exp(Log_1_01506*data))
-    return round(30 * math.exp(Log_1_01506*data), 1)
+        return int(round(raw))
+    return round(raw, 1)
 
 def bpm_to_data(bpm):
     r'''Can encode bpm between 30 and 200 inclusive.
@@ -220,6 +232,12 @@ def midi_queue_status(queue=None):
 
 def midi_queue_time(queue=None):
     return midi_queue_status(queue).tick_time
+
+def fraction(n, d):
+    ans = Fraction(n, d)
+    if ans.denominator == 1:
+        return ans.numerator
+    return ans
 
 def trace(*msgs):
     r'''adds truncated time to front
@@ -642,13 +660,14 @@ def midi_pause(secs=None, to_tick=None, post_fns=None):
 
     Calls the process_fn registered with midi_process_fn for each event received. 
 
-    secs may be None (pause as long as it takes to receive an event), 0 (don't pause at all, just do a
-    quick check), or a (perhaps fractional) number of secs to wait.  If a number is given, the program
-    will be suspended for that many seconds (rather than returning when the first event is received).
+    If to_tick is None, just does a select(secs) and returns when the first event(s) are received
+    (after processing them).  So secs == 0 does a quick check, secs == None, waits forever, other secs
+    waits up to that long for the first event(s).
 
-    If to_tick is None it doesn't factor into how long the pause is.  Otherwise, the pause will end
-    when the queue reaches that tick; even in the face of intervening tempo changes and queue
-    stop/start/continues.
+    If to_tick is not None, the pause will end when the queue reaches that tick; even in the face of
+    intervening tempo changes and queue stop/start/continues.  If the Queue is not running, it will
+    only wait up to secs seconds for the Queue to start runing.  Once the Queue is running, secs is
+    ignored.
 
     post_fns is a list of functions to call after drain_output is called.  These are called with
     no arguments and must return True if drain_output needs to be called (again).  The caller must
@@ -665,18 +684,48 @@ def midi_pause(secs=None, to_tick=None, post_fns=None):
     if Verbose:
         trace(f"midi_pause({secs=}, {to_tick=})")
 
+    if Client.event_output_pending():
+        trace(f"midi_pause: output_pending on entry pending={Client.event_output_pending()}")
+
     def wait_once(secs):
+        r'''Wait up to secs for one (set of) event(s).  secs is interpreted by Sel.select.
+
+            - Process all events received
+            - if needed: drain_output
+            - run (and clear) post_fns
+            - return (nothing)
+        '''
         global Spp
         drain_output = False
+        exc = None
+
+        # There is only one registered fileobj, so only ever 1 returned event here.
         for sk, sel_event in Sel.select(secs):
+            # This next loop handles multiple MIDI events arriving at the same time.
             num_pending = Client.event_input_pending(True)
             for i in range(1, num_pending + 1):
                 #trace("reading", i)
                 event = Client.event_input()
-                if sk.data(event):
-                    drain_output = True
+                pre_pending = Client.event_output_pending()
+                try:
+                    if sk.data(event):
+                        post_pending = Client.event_output_pending()
+                        if post_pending == pre_pending:
+                            trace(f"midi_pause: drain_output True, but nothing new buffered")
+                        drain_output = True
+                    else:
+                        post_pending = Client.event_output_pending()
+                        if post_pending > pre_pending:
+                            trace(f"midi_pause: drain_output False, but something was buffered")
+                except WakeUpExeception as e:
+                    exc = e
+                    # Continue to finish processing all pending MIDI events.
+                    # Then re-raise exc when done.
         if drain_output:
             Client.drain_output()
+            pending = Client.event_output_pending()
+            if pending:
+                trace(f"midi_pause: {pending=} after drain_output()")
         if post_fns:
             if Verbose:
                 trace("midi_pause: running post_fns")
@@ -687,6 +736,8 @@ def midi_pause(secs=None, to_tick=None, post_fns=None):
             post_fns.clear()
             if drain_output:
                 Client.drain_output()
+        if exc is not None:
+            raise exc
         if Spp and Raise_SPPException:
             spp = Spp
             Spp = None
@@ -694,12 +745,12 @@ def midi_pause(secs=None, to_tick=None, post_fns=None):
 
     if to_tick is None and (secs is None or secs == 0):
         wait_once(secs)
-    else:
+    else:  # to_tick is not None or (secs is not None and secs != 0)
         if secs is not None:
             next_secs = secs
             end = time.clock_gettime(time.CLOCK_MONOTONIC) + secs
         def tick_override():
-            if secs is None:
+            if secs is None:  # to_tick is not None
                 while not Queue_running:
                     if Verbose:
                         trace(f"tick_override: queue not running, doing wait_once(None)")
@@ -716,7 +767,7 @@ def midi_pause(secs=None, to_tick=None, post_fns=None):
             next_secs = tick_override()
         while next_secs > 0:
             wait_once(next_secs)
-            if secs is not None:
+            if secs is not None:  # to_tick is not None or secs != 0
                 next_secs = end - time.clock_gettime(time.CLOCK_MONOTONIC)
             if to_tick is not None:
                 next_secs = tick_override()
@@ -945,12 +996,18 @@ def midi_get_named_queue(name):
     return Client.get_named_queue(name)
 
 def midi_close_queue(name):
+    global Default_queue
     if name not in Queues:
         trace(f"midi_close_queue: {name=} unknown -- ignored")
     else:
         if Verbose:
-            trace(f"midi_close_queue, {name=}, {Queues[name]=}")
+            trace(f"midi_close_queue, {name=}, {Queues[name]=}, {Default_queue=}, "
+                  f"pending before={Client.event_output_pending()}")
         Queues[name].close()
+        if Verbose:
+            trace(f"midi_close_queue, {name=}, pending after={Client.event_output_pending()}")
+        if Queues[name] is Default_queue:
+            Default_queue = None  # remove reference, so client._queues gets updated!
         del Queues[name]
 
 def midi_close():

@@ -31,7 +31,7 @@ class Attrs:
         return f"<Attrs({self.name}): {tuple(sorted(n for n in self.__dict__.keys() if n != 'name'))}>"
 
     def dump(self, indent=0):
-        print(f"{' ' * indent}{self.name}:")
+        print(f"{' ' * indent}Attrs({self.name}):")
         for key, value in sorted(self.__dict__.items()):
             assert key[0] != '_'
             if key not in self.omit:
@@ -379,6 +379,9 @@ Grace = Parser("grace", as_class(Attrs),
 Time_modification = Parser("time-modification", as_class(Attrs),
                            save="actual-notes normal-notes".split())
 
+In_slur = False
+Tuplet_number = None
+
 class Note:
     id = None
     note = None
@@ -388,11 +391,23 @@ class Note:
     rest = False
     dot = False
     cue = False
+    slur_in = False
+    slur_out = False
+    tuplet_number = None      # [0-<time_modification.actual_notes>)
     tie = ()
     grace = None
-    time_modification = None
+    time_modification = None  # present in all notes within tuplet
     notations = None
     ignore = False
+
+    # notations copied up to self:
+    tied = None
+    slur = None
+    articulations = None
+    arpeggiate = False
+    fermata = None
+    ornaments = None
+    tuplet = None
 
     # id: unique for whole file
     # color: #RRGGBB
@@ -413,11 +428,11 @@ class Note:
     #   a slash is played quickly before the main note
     #   otherwise, held longer, often on the beat, and may emphazied more strongly than the main note
     # time_modification: actual-notes (e.g., 3), normal-notes (e.g, 2) (see tuplet)
-    # notations:
+    # notations: (these are lifted up to the top level)
     #   tied: e.g., start, stop
     #   slur: type (e.g., start, stop), number (e.g, 1)
-    #     slurs are only between two notes.  First note played slightly louder and smoothly (legato)
-    #     into the second note, which is played slightly softer and shortened slightly.
+    #     slurs span a series of notes.  First note played slightly louder and smoothly (legato)
+    #     into the next note, which is played slightly softer and shortened slightly.
     #   articulations:
     #     strong_accent: e.g., up, down
     #     accent, staccato, detached-legato, staccatissimo, tenuto (all True)
@@ -443,6 +458,7 @@ class Note:
     #           fit in an integer (not sure if it's rounded or truncated).
 
     def __init__(self, name, properties, trace=False):
+        global In_slur, Tuplet_number
         self.trace = trace
         self.name = name
         for key, value in properties.items():
@@ -454,18 +470,78 @@ class Note:
                 elif value.alter < 0:
                     self.note = f"{value.step}{value.octave}{'b' * value.alter}"
                 else:
-                    print("note got unknown alter", value.alter)
+                    print(f"{Last_measure=}: note got unknown alter", value.alter)
                     self.note = f"{value.step}{value.octave}+?"
                 self.midi_note = value.midi_note
             else:
                 #if key == 'tie' and len(value) > 1:
                 #    print(f"Note: got more than one tie: {value}")
                 setattr(self, key.replace('-', '_'), value)
+                if key == 'notations':
+                    # set notations on self too.
+                    for attr in "tied slur articulations arpeggiate fermata ornaments tuplet".split():
+                        if hasattr(value, attr):
+                            setattr(self, attr, getattr(value, attr))
+
+        # set self.slur_in/out
+        if self.slur is None:
+            if In_slur:
+                self.slur_in = True
+                self.slur_out = True
+        else:
+            slur = self.slur
+            if slur.type == 'start':
+                if In_slur:
+                    print(f"{Last_measure=}: Multiple slur starts")
+                self.slur_out = True
+                In_slur = True
+            elif slur.type == 'stop':
+                if not In_slur:
+                    print(f"{Last_measure=}: Isolated slur stop")
+                else:
+                    self.slur_in = True
+                    In_slur = False
+            else:
+                print(f"{Last_measure=}: Unknown slur type: {slur.type}")
+
+        # set self.tuplet_number
+        if self.tuplet is None:
+            if Tuplet_number is not None:
+                if not self.chord:
+                    Tuplet_number += 1
+                self.tuplet_number = Tuplet_number
+                if self.trace:
+                    print(f"{Last_measure=}, {self.note=}, {self.chord=}: {self.tuplet_number=}")
+        else:
+            tuplet = self.tuplet
+            if tuplet.type == 'start':
+                if Tuplet_number is not None:
+                    print(f"{Last_measure=}, {self.note=}: Multiple tuplet starts")
+                Tuplet_number = self.tuplet_number = 0
+                if self.trace:
+                    print(f"{Last_measure=}, {self.note=}: {self.tuplet_number=}")
+            elif tuplet.type == 'stop':
+                if Tuplet_number is None:
+                    print(f"{Last_measure=}, {self.note=}: Isolated tuplet stop")
+                else:
+                    if not self.chord:
+                        Tuplet_number += 1
+                    self.tuplet_number = Tuplet_number
+                    if self.trace:
+                        print(f"{Last_measure=}, {self.note=}: {self.tuplet_number=}")
+                    if self.tuplet_number + 1 != self.time_modification.actual_notes:
+                        print(f"{Last_measure=}, {self.note=}: Wrong tuplet count: "
+                              f"got {self.tuplet_number + 1}, "
+                              f"expected {self.time_modification.actual_notes}")
+                    Tuplet_number = None
+            else:
+                print(f"{Last_measure=}, {self.note=}: Unknown tuplet type: {tuplet.type}")
+
         if hasattr(self, 'type') and hasattr(self.type, 'size'):
             if self.type.size != 'cue':
-                print(f"Note got type.size != cue, got {self.type.size} instead")
+                print(f"{Last_measure=}: Note got type.size != cue, got {self.type.size} instead")
             if not self.cue:
-                print(f"Note got type.size == cue, but no <cue/> element")
+                print(f"{Last_measure=}: Note got type.size == cue, but no <cue/> element")
 
     def __repr__(self):
         if self.rest:
@@ -533,6 +609,8 @@ Barline = Parser("barline", as_class(Attrs),
                  children=(Repeat, Ending),
                  list=True)
 
+Last_measure = None
+
 class Measure:
     repeat_forward = False
     repeat_backward = False
@@ -564,9 +642,11 @@ class Measure:
     #   light-light)
 
     def __init__(self, name, properties, trace=False):
+        global Last_measure
         self.trace = trace
         self.name = name
         self.number = properties['number']
+        Last_measure = self.number
         self.attributes = []
         children = []
         for type in "attributes direction backup forward note barline".split():

@@ -82,14 +82,14 @@ class repeat:
         for num, ending in enumerate(self.endings, 1):
             for measure in self.body:
                 if isinstance(measure, repeat):
-                    yield from measure.unroll(f"{prefix}.{num}")
+                    yield from measure.unroll(f"{prefix}-{num}")
                 else:
                     measure_copy = deepcopy(measure)
-                    measure_copy.number = f"{measure_copy.number}{prefix}.{num}"
+                    measure_copy.number = f"{measure_copy.number}{prefix}-{num}"
                     yield measure_copy
             for measure in ending:
                 measure_copy = deepcopy(measure)
-                measure_copy.number = f"{measure_copy.number}{prefix}.{num}"
+                measure_copy.number = f"{measure_copy.number}{prefix}-{num}"
                 yield measure_copy
 
 
@@ -156,8 +156,7 @@ def unroll_parts(parts, trace=False):
     return new_parts
 
 
-
-if __name__ == "__main__":
+def run():
     import argparse
     from parse_xml import parse
     
@@ -177,3 +176,4 @@ if __name__ == "__main__":
             for measure in measures:
                 print(measure.number)
             print()
+

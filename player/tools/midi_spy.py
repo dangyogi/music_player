@@ -13,6 +13,8 @@ Err_secs_counts = Counter()
 Err_pulse_counts = Counter()
 Clock_stat_period = None
 Clocks_seen = 0
+NoteOns_seen = None
+NoteOffs_seen = None
 
 def process_event(event):
     # w/false, often 0, but there's still an event.
@@ -95,8 +97,9 @@ def process_event(event):
     elif event.type == EventType.STOP and str(event.source) == CM_timer_addr:
         #def str_seen(seen):
         #    return ', '.join(f"{str(addr)}: {count}" for addr, count in sorted(seen.items()))
-        trace(f"STOP: got {Clocks_seen} CLOCKS, {NoteOns_seen} NOTEONs, "
-              f"{NoteOffs_seen} NOTEOFFs")
+        if NoteOns_seen is not None:
+            trace(f"STOP: got {Clocks_seen} CLOCKS, {NoteOns_seen} NOTEONs, "
+                  f"{NoteOffs_seen} NOTEOFFs")
         show_clock_stats = True
     if show_clock_stats:
         trace("Clock time stats:")

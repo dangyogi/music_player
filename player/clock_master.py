@@ -80,8 +80,8 @@ Queues = {}
 Queue_running = False    # True after Start/Continue, False after Stop
 Clock_queue = None
 Timer_port = None        # write
-Output_port = None       # write
-Immediate_port = None    # RW, no subs
+#Output_port = None       # write         # FIX: delete
+#Immediate_port = None    # RW, no subs   # FIX: delete
 Bpm = None
 #Pulses_per_clock = 80   # from midi_utils
 Clock_ppq = 24 * Pulses_per_clock
@@ -92,19 +92,35 @@ Min_stop_period = 0.02   # min period (secs) that queue can stopped before start
                          # for the Clock queue to drain.
 Last_clock_tick_sent = None
 
-def init():
+def init(pass_through_ports):
     r'''Initializes midi, creates "Clock" queue and "Input", "Timer" and "Output" ports.
     '''
-    global Clock_queue, Immediate_port, Timer_port, Output_port
+    global Clock_queue, Timer_port, Pass_through_ports # FIX, Output_port
 
     midi_init("Clock Master")
     Clock_queue = midi_create_queue("Clock", Clock_ppq, default=False)
     trace(f"Client_id={midi_get_client_id()}, Clock_queue={Clock_queue.queue_id}")
     Queues["Clock"] = Clock_queue
-    midi_create_input_port("Input", connect_from=["Net Client"])
-    Immediate_port = midi_create_port("Immediate", caps=PortCaps.READ | PortCaps.WRITE, default=False)
-    Timer_port = midi_create_output_port("Timer", default=False, connect_to=["FLUID Synth:0"])
-    Output_port = midi_create_output_port("Output", default=False, connect_to=["FLUID Synth:0"])
+    midi_create_input_port("Input", connect_from=["Player:Clock-master"])
+    Pass_through_ports = []
+    print(f"{pass_through_ports=}")
+    for name in pass_through_ports:
+        port_name, connect_from, connect_to = name.split('/')
+        print(f"init: {port_name=}, {connect_from=}, {connect_to=}")
+        Pass_through_ports.append(midi_create_inout_port(port_name, default=False,
+                                                         connect_from=connect_from.split(','),
+                                                         connect_to=connect_to.split(','),
+                                                        ))
+
+    # FIX: delete
+    #Immediate_port = midi_create_port("Immediate", caps=PortCaps.READ | PortCaps.WRITE, default=False)
+
+    Timer_port = midi_create_output_port("Timer", default=False,
+                                         connect_to=["FLUID Synth:0", "Net Client"])
+
+    # FIX:
+    #Output_port = midi_create_output_port("Output", default=False, connect_to=["FLUID Synth:0"])
+
     midi_process_fn(process_event)
 
 def process_event(event):
@@ -122,13 +138,15 @@ def process_event(event):
             trace(f"process_event: SKIPPED CLOCK, from {event.source}, tick={event.tick}, "
                   f"queue_id={event.queue_id}")
         return False
-    event.dest = None  # avoid reusing dest (e.g., sending again to Immediate_port)...
     drain_needed = False
     if event.type in Event_fns:
         if Verbose:
             trace(f"process_event: event type={Event_type_names[event.type]} in Event_fns, "
                   f"calling Event_fn")
         if Event_fns[event.type](event):
+            drain_needed = True
+    elif event.type == EventType.CONTROLLER and event.channel == 15:
+        if process_CM_control_change(event):
             drain_needed = True
     else:
         if Verbose:
@@ -137,15 +155,15 @@ def process_event(event):
         drain_needed = True
     return drain_needed
 
-def send_event(event, port=None, drain_output=False):
-    r'''Send event out of clock-master.  Port defaults to Output_port.
+def send_event(event, drain_output=False):
+    r'''Send event out of clock-master on the same port it came in on.
 
     drain_output needs to be done after the call if the drain_output param is False.
 
     Returns nothing.
     '''
-    if port is None:
-        port = Output_port
+    port = event.dest
+    event.dest = None
     #if event.tag and event.tick:
     if event.tag:
         # send through queue
@@ -162,11 +180,13 @@ def send_event(event, port=None, drain_output=False):
               f"forwarding direct to port={Port_names[port.port_id]}")
     midi_send_event(event, port=port, drain_output=drain_output)
 
+# FIX: delete
 def queue(event):
     r'''Returns True if queued.  Will show up again later on Immediate_port.
 
     drain_output needs to be called if True returned.
     '''
+    return False  # never queue
     if event.dest != Immediate_port.port_id and event.tag and event.tick:
         # send through queue
         if event.tag in Queues:
@@ -187,6 +207,7 @@ def process_CM_start(event):
     if Verbose:
         trace(f"process_CM_start: forwarding event to Timer_port")
     event.tick = 0
+    event.dest = None
     midi_send_event(event, queue=Clock_queue, port=Timer_port)
     return True
 
@@ -209,6 +230,7 @@ def process_CM_continue(event):
     if Verbose:
         trace(f"process_CM_continue: forwarding event to Timer_port")
     event.tick = 0
+    event.dest = None
     midi_send_event(event, queue=Clock_queue, port=Timer_port)
     return True
 
@@ -234,6 +256,7 @@ def process_CM_stop(event):
         if Verbose:
             trace(f"process_CM_stop: forwarding event out Timer_port")
         event.tick = 0
+        event.dest = None
         midi_send_event(event, queue=Clock_queue, port=Timer_port)
         #now = midi_queue_time(Clock_queue)
         #if Last_clock_tick_sent > now:
@@ -261,6 +284,7 @@ def process_CM_songpos(event):
         if Verbose:
             trace(f"process_CM_songpos: not queued, forwarding to Timer_port")
         event.tick = 0
+        event.dest = None
         midi_send_event(event, queue=Clock_queue, port=Timer_port)
     return True
 
@@ -281,6 +305,7 @@ def process_CM_system(event):
         if Verbose:
             trace(f"process_CM_system: not queued, forwarding to Timer_port")
         event.tick = 0
+        event.dest = None
         midi_send_event(event, queue=Clock_queue, port=Timer_port)
     return True
 
@@ -305,9 +330,13 @@ def process_CM_control_change(event):
             ppq = data_to_ppq(event.value)
             q_name = f"Q-{event.tag}"
             if Verbose:
-                trace(f"process_CM_control_change: CC_ppq {ppq}, creating queue {q_name}")
+                trace(f"process_CM_control_change: CC_ppq {ppq}")
             if event.tag in Queues:
+                if Verbose:
+                    trace(f"process_CM_control_change: CC_ppq {ppq}, deleting old queue {q_name}")
                 midi_close_queue(q_name)
+            if Verbose:
+                trace(f"process_CM_control_change: CC_ppq {ppq}, creating queue {q_name}")
             Queues[event.tag] = midi_create_queue(q_name, ppq, default=False)
             return False
         if event.param == Clock_master_CC_close_queue:
@@ -341,13 +370,12 @@ Event_fns = {   # These are given different names than the ones in midi_utils to
     EventType.STOP: process_CM_stop,
     EventType.SONGPOS: process_CM_songpos,
     EventType.SYSTEM: process_CM_system,
-    EventType.CONTROLLER: process_CM_control_change,
 }
 
 def recalc_clock():
     global Secs_per_tick, Latency_in_ticks
     Secs_per_tick = 60 / (Bpm * Clock_ppq)
-    Latency_in_ticks = int(math.ceil(Latency / Secs_per_tick))
+    Latency_in_ticks = int(math.ceil(Latency / Secs_per_tick - 1e-3))
     #if Verbose:
     trace(f"recalc_clock: {Bpm=}, {Clock_ppq=}, {Secs_per_tick=}, {Latency_in_ticks=}")
 
@@ -401,6 +429,11 @@ def run():
     parser = argparse.ArgumentParser()
     parser.add_argument('--latency', '-l', type=float, default=0.005)
     parser.add_argument('--verbose', '-v', action="store_true", default=False)
+    parser.add_argument('pass_through_ports', nargs='*',
+                        default=["To Player/Net Client/Player:Control",
+                                 "To Exp_console/Player:Control/Net Client",
+                                 "To Synth/Player:Synth/FluidSynth",
+                                ])
 
     args = parser.parse_args()
     Verbose = args.verbose
@@ -409,7 +442,7 @@ def run():
     try:
         if Verbose:
             midi_set_verbose(Verbose)
-        init()
+        init(args.pass_through_ports)
         time.sleep(1)
         send_clocks()
     finally:
