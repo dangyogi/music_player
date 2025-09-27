@@ -4,11 +4,61 @@ r'''State
 
 '''
 
+from bisect import bisect_left
+
 from .parse_xml import parse
 from .unroll_repeats import unroll_parts
 from .assign_starts import assign_parts
 
 from .tools.midi_utils import *
+
+
+Parts = None
+Continue_spp = None
+
+class spp:
+    r'''Finds the first note who's start is >= spp.
+
+    This points to the first note to be played when Continue is done. 
+
+    To do this, it has:
+      - part_no     # index into Parts
+      - measure_no  # index into measures
+      - note_no     # index into measure.sorted_notes
+    '''
+    def __init__(self, spp_16ths):
+        self.spp_16ths = spp_16ths   # spp in 16ths
+        self.spp_clocks = spp * 6    # spp in clocks
+
+    def __repr__(self):
+        return f"<spp: {self.spp_16ths}>"
+
+    @classmethod
+    def create(cls, spp_16ths):
+        spp = cls(spp_16ths)
+        for part_no, (info, measures) in enumerate(Parts):
+            spp.part_no = part_no
+            if spp.spp_clocks < info.part_duration_clocks:
+                first_measure = measures[0]
+                i = spp.spp_clocks // first_measure.clocks_per_measure
+                while i >= 0 and i < len(measures):
+                    measure = measures[i]
+                    if measure.start > spp.spp_clocks: 
+                        # measure after spp
+                        i -= 1
+                    elif spp.spp_clocks >= measure.start + measure.duration_clocks:
+                        # measure before spp
+                        i += 1
+                    else: # measure.start <= spp.spp_clocks < measure.start + measure.duration_clocks
+                        spp.measure_no = i
+                        if measure.start == spp.spp_clocks: 
+                            spp.note_no = 0
+                        else:
+                            spp.note_no = bisect_left([note.start for note in measure.sorted_notes],
+                                                      spp.spp_clocks)
+                        return spp
+        trace(f"{spp=} not found in song, largest spp is {Parts[0][1][-1].sorted_notes[-1].start}")
+        return None
 
 
 Song_dir = "~/Documents/MuseScore4/Scores/"
@@ -18,6 +68,7 @@ Songs = [
     Song_dir + "Gladiolus_Rag_by_Scott_Joplin_1907.mxl",
     Song_dir + "La_Campanella-fix.mxl",
 ] 
+
 
 # Ch1_commands and Ch1_CC_commands map to State method names.
 
@@ -33,7 +84,13 @@ Ch1_CC_commands = {   # Passed event.value
 }
 
 
-class State:
+class BackToTopException(WakeUpException):
+    def __init__(self, drain_output, spp):
+        super().__init__(drain_output)
+        self.spp = spp
+
+
+class BaseState:
     def enter(self):
         return False
 
@@ -44,6 +101,20 @@ class State:
         global State
         State = new_state
         return State.enter()
+
+    def backup_switch(self, new_state, spp):
+        raise BackToTopException(self.switch(new_state), spp)
+
+    def song_select(self, event):
+        print(f"{self.name()}.song_select: ignored")
+        return False
+
+    def song_position_pointer(self, event):
+        print(f"{self.name()}.song_position_pointer: ignored")
+        return False
+
+    # These last three arrive here from the exp console.  These will call midi_start/stop/continue,
+    # but the events echoed back from the Clock_master do not come here.
 
     def start(self, event):
         print(f"{self.name()}.start: ignored")
@@ -57,143 +128,76 @@ class State:
         print(f"{self.name()}.continue_: ignored")
         return False
 
-    def song_position_pointer(self, event):
-        print(f"{self.name()}.song_position_pointer: ignored")
-        return False
 
-    def song_select(self, event):
-        print(f"{self.name()}.song_select: ignored")
-        return False
+class No_song(BaseState):
+    r'''Parts is None and Continue_spp is None.
 
-
-Parts = None
-Start_spp = None
-Start_end = None
-Continue_end = None
-
-class start_spp:
-    r'''Finds the first note who's start is >= spp.
-
-    This points to the first note to be played when Start is done. 
+    Note: enter() is never called on this state!
     '''
-    def __init__(self, spp):
-        self.spp = spp  # spp in 16ths
-
-def set_spp(spp):
-    for part_no, (info, measures) in enumerate(Parts):
-        spp.part_no = part_no
-        first_measure = measures[0]
-        spp.divisions = first_measure.divisions
-        trace(f"  divisions={Divisions}")
-        spp.divisions_per_16th = first_measure.divisions_per_16th
-        spp.spp_divisions = spp.spp * spp.divisions_per_16th   # spp in divisions
-        for measure_no, measure in enumerate(measures):
-            if measure.start > spp.spp_divisions: 
-                # Looks like measure_no is past the spp position, look at prior measure:
-                spp.measure_no = measure_no - 1
-                if search_measure(measures[self.measure_no]):
-                    return spp
-                # None of the notes in the prior measure match
-                spp.measure_no += 1
-                # This will be > than spp_divisions, so qualifies for both start and end.
-                spp.note_no = 0
-                return spp
-        if search_measure(spp, measures[-1]):
-            spp.measure_no = measure_no
-            return spp
-    trace(f"{spp=} not found in song, largest spp is {Parts[0][1][-1].sorted_notes[-1].start}"
-    return None
-
-def search_measure(spp, measure):
-    r'''Returns True if found, setting self.note_no to the note found.
-    '''
-    for note_no, notes in enumerate(measure.sorted_notes):
-        if note.start >= spp.spp_divisions:
-            # This is the first note past the spp.  This is the note we want!
-            spp.note_no = note_no
-            return True
-    return False
-
-class No_song(State):
-    # Note: enter() is never called on this state!
-
     def song_select(self, event):
         # event.value has song number
-        global Parts, Start_spp, Start_end, Continue_end
-        if event.value not in Songs:
+        global Parts, Start_spp, Continue_spp
+        if event.value >= len(Songs):
             print(f"No_song.song_select: unknown song number, {event.value=}")
             return False
         parts = parse(Songs[event.value])
         new_parts = unroll_parts(parts)
         assign_parts(new_parts)
         Parts = new_parts
-        Start_spp = set_spp(start_spp(0))
-        Start_end = None
-        Continue_end = None
-        # FIX: send time signature and key signature
+        Start_spp = spp.create(0)
+        Continue_spp = None
+        first_measure = Parts[0][1][0]
+        midi_set_time_signature(*first_measure.time)
+        # FIX: send key signature?
         return self.switch(New_song_state)
 
-No_song_state = No_song()
-
-New_spp = None
-
 class SPP(No_song):
-    end_at_msb_value = None
-    loop_at_msb_value = None
-
     def song_position_pointer(self, event):
-        global Start_spp, Start_end
-        spp = set_spp(start_spp(event.value))
+        global Continue_spp
+        spp = spp.create(event.value)
         if spp is None:
             print(f"{self.name()}.song_position_pointer, {event.value} not found -- ignored")
             return False
-        Start_spp = spp
-        Start_end = None
-        print(f"{self.name()}.song_position_pointer: set to {Start_spp}")
+        Continue_spp = spp
+        print(f"{self.name()}.song_position_pointer: set to {Continue_spp}")
         return self.switch(Ready_state)
 
-    def set_end(self, spp):
-        global Start_end
-        Start_end = spp
-
 class New_song(SPP):
-    def enter(self):
-        global Continue_spp
-        # FIX: send time signature and key signature
-        Continue_spp = 0
-        return True
-
+    r'''Parts is not None but Continue_spp is None.
+    '''
     def start(self, event):
-        self.switch(Running_state)
-        return True
-
-New_song_state = New_song()
+        midi_start()
+        self.backup_switch(Running_state, Start_spp)
 
 class Ready(SPP):
+    r'''Parts is not None and Continue_spp is not None.
+    '''
     def continue_(self, event):
-        global New_spp
-        New_spp = None
+        midi_continue()
+        self.backup_switch(Running_state, Continue_spp)
+
+    def start(self, event):
+        midi_start()
+        self.backup_switch(Running_state, Start_spp)
+
+class Paused(SPP):
+    r'''Parts is not None but Continue_spp is None.
+    '''
+    def continue_(self, event):
+        midi_continue()
+        # no BackToTopException, continues where stop left off.
         return self.switch(Running_state)
 
     def start(self, event):
-        global Continue_spp, New_spp
-        Continue_spp = New_spp
-        New_spp = None
-        return self.switch(Running_state)
+        midi_start()
+        self.backup_switch(Running_state, Start_spp)
 
-Ready_state = Ready()
-
-class Paused(SPP):
-    def continue_(self, event):
-        global Start_end, Continue_end
-        Start_end = Continue_end
-        Continue_end = None
-        return self.switch(Running_state)
-
-Paused_state = Paused()
-
-class Running(State):
+class Running(BaseState):
+    r'''Parts is not None but Continue_spp is None.
+    '''
     def enter(self):
+        global Continue_spp
+        Continue_spp = None
         self.run = True
         while self.run:
             # FIX: run here!
@@ -201,9 +205,14 @@ class Running(State):
         return False
 
     def stop(self, event):
-        return self.end()
+        midi_stop()
+        return self.switch(Paused_state)
 
 
+No_song_state = No_song()
+New_song_state = New_song()
+Ready_state = Ready()
+Paused_state = Paused()
 Running_state = Running()
 
 
@@ -224,3 +233,4 @@ def process_ch1_event(event):
         method = Ch1_commands[event.type]
         param = event
     return getattr(State, method)(param)
+

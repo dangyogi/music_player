@@ -60,8 +60,7 @@ class assign_measure:
         divisions_per_measure - brought out in the measure declaring both divisions and time
         clocks_per_measure - brought out in the measure declaring both divisions and time
         start - start of measure in clocks from the start of the part.
-        start_spp - start of measure in song position pointer (16th notes)
-        duration - duration of measure (greatest note stop time)
+        duration_clocks - duration of measure (greatest note stop time)
 
     Also assigns the following to notes (that are not ignored):
         duration_clocks - note duration in clocks

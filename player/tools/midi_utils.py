@@ -183,7 +183,9 @@ Log_1_01506 = math.log(1.01506)
 
 
 class WakeUpException(Exception):
-    pass
+    def __init__(self, drain_output):
+        super().__init__()
+        self.drain_output = drain_output
 
 class SPPException(WakeUpException):
     def __init__(self, spp):
@@ -719,6 +721,8 @@ def midi_pause(secs=None, to_tick=None, post_fns=None):
                             trace(f"midi_pause: drain_output False, but something was buffered")
                 except WakeUpExeception as e:
                     exc = e
+                    if e.drain_output:
+                        drain_output = True
                     # Continue to finish processing all pending MIDI events.
                     # Then re-raise exc when done.
         if drain_output:

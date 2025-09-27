@@ -1,7 +1,16 @@
 # player.py
 
+r'''Music player.
+
+Plays music from musicxml files.  Takes it's expression as midi commands (e.g., from expression
+console using my control-console github repo).
+
+Here "Tick" refers to the tick used for queuing in ALSA.  The "tick" rate (ppq) is set by a command
+line argument (--ppq).  This defaults to 960 (so 40 ALSA queue "ticks" per MIDI CLOCK).
+'''
+
 from .expressions import Ch2_CC_commands, linear, exponential
-import states
+from . import states
 
 from .tools.midi_utils import *
 
@@ -15,13 +24,14 @@ Channel = 0
 Transpose = 0
 
 def init(tag, ppq, latency, verbose):
-    global Tag, Verbose, Latency, Ppq, Control_port, Control_port_addr, Synth_port
-    global Clock_master_port, Clock_master_port_addr
+    global Tag, Verbose, Latency, Ppq, Ticks_per_clock, Control_port, Control_port_addr
+    global Synth_port, Clock_master_port, Clock_master_port_addr
 
     Tag = tag
     Verbose = verbose
     Latency = latency
     Ppq = ppq
+    Ticks_per_clock = fraction(Ppq, 24)
     midi_set_verbose(verbose)
     midi_init("Player")
     Control_port = midi_create_inout_port("Control", connect_from=["Clock Master:To Player"],
@@ -53,8 +63,11 @@ def transpose(value):
 scale_tempo = exponential(1.01506, 30)
 
 def tempo(value):
-    tempo = scale_tempo(value)
-    # FIX: code
+    global Clocks_per_second, Tick_latency
+    bpm = scale_tempo(value)   # bpm (beats per minute).  "beat" == "quarter note"
+    Clocks_per_second = fraction(bpm * 24, 60)
+    Tick_latency = int(math.ceil(Clocks_per_second * Latency))  # ticks in latency period
+                                                                # Looks like this will always be 1!
     return False
 
 def synth_volume_msb(value):
@@ -140,135 +153,69 @@ def process_event(event):
     trace(f"process_event({event=}): unknown channel, {event.channel=}, ignored")
     return False
 
-def send_parts(measure_number):
+def send_parts():
     try:
         while True:
             midi_pause()
-    except BackToTopExeception:
-        pass
+    except states.BackToTopException as e:
+        spp = e.spp
     while True:
         try:
-            for info, measures in states.Parts:
-                trace("part", info.id)
-                send_measures(measures, first_measure, last_measure, bpm, measure_number)
-        except BackToTopExeception:
-            pass
+            # FIX: Should this play all parts?
+            info, measures = states.Parts[spp.part_no]
+            trace("part", info.id)
+            send_measures(measures, spp.measure_no, spp.note_no)
+        except states.BackToTopException as e:
+            spp = e.spp
 
-def send_measures(measures, first_measure, last_measure, bpm, measure_number):
-    global Final_tick, Tick_offset
-
-    send_info(measures[0], bpm)
-    spp_division = None
-    notes_played = 0
-    i = 0
-    if first_measure is not None:
-        for i, measure in enumerate(measures):
-            #trace(f"send_measure got {measure.number!r}, looking for {first_measure!r}")
-            if str(measure.number) == first_measure:
-                Tick_offset = round(measure.start * Ticks_per_division)
-                break
-        else:
-            raise ValueError(f"send_measures: first_measure={first_measure} not found")
-    midi_start()
-    while i < len(measures):
-        try:
-            if measure_number is None:
-                notes_played += send_notes(measures[i], spp_division)
-            elif measures[i].number == measure_number:
-                Tick_offset = measures[i].start * Ticks_per_division - midi_tick_time()
-                notes_played += send_notes(measures[i], spp_division)
-            spp_division = None
-        except SPPException as x:
-            spp_division = x.spp * Divisions_per_16th
-
-            # estimate starting point of search, this could err on the high or low side...
-            i = spp_division // Divisions_per_measure
-
-            # if i errs on the low side, search up to first measure.start >= spp_division
-            while i + 1 < len(measures) and measures[i].start < spp_division:
-                i += 1
-
-            # now i is on the high side, search down to first measure.start <= spp_division
-            while i > 0 and measures[i].start > spp_division:
-                i -= 1
-            Final_tick = 0
-        else:
-            if last_measure is not None and str(measures[i].number) == last_measure:
-                break
-            i += 1
-    trace("total notes played", notes_played)
-
-def send_info(first_measure, bpm):
-    global Tempo, Divisions, Divisions_per_16th, Divisions_per_measure
-    global Ticks_per_division, Tick_latency
-
-    trace("send_info:")
-    key = first_measure.key
-    if hasattr(key, 'mode'):
-        trace(f"  key_sig: fifths={key.fifths}, mode={key.mode}")
-    else:
-        trace(f"  key_sig: fifths={key.fifths}")
-    trace(f"  time_sig={first_measure.time}")
-    midi_set_time_signature(*first_measure.time)
-    if bpm is None:
-        Tempo = first_measure.tempo
-    else:
-        Tempo = bpm
-    trace(f"  tempo={Tempo}")
-    midi_set_tempo(Tempo)
-    trace(f"  volume={first_measure.volume}")
-    trace(f"  dynamics={first_measure.dynamics}")
-    Divisions = first_measure.divisions
-    trace(f"  divisions={Divisions}")
-    Divisions_per_16th = first_measure.divisions_per_16th
-    trace(f"  divisions_per_16th={Divisions_per_16th}")
-    Divisions_per_measure = first_measure.divisions_per_measure
-    trace(f"  divisions_per_measure={Divisions_per_measure}")
-    Ticks_per_division = fraction(Ppq, Divisions)
-    Tick_latency = int(math.ceil((Ppq * Tempo) * Latency / 60))
-
-def send_notes(measure, starting_division):
+def send_measures(measures, first_measure, first_note):
     global Tick_offset
 
-    trace(f"send_notes({starting_division=}): measure={measure.number}, index={measure.index}, "
-          f"start={measure.start}, start_spp={measure.start_spp}, duration={measure.duration}")
+    notes_played = 0
+    Tick_offset = round(measures[first_measure].sorted_notes[first_note].start * Ticks_per_clock)
+    for i in range(first_measure, len(measures)):
+        measure = measures[i]
+        trace(f"send_measures: measure={measure.number}, index={measure.index}, {i=}, "
+              f"start={measure.start}, duration_clocks={measure.duration_clocks}")
+        if measure.time:
+            midi_set_time_signature(*measure.time)
+        notes_played += send_notes(measure, first_note)
+        first_note = 0
+    trace("total notes played", notes_played)
+
+def send_notes(measure, first_note):
     notes_played = 0
     drain_output = False
-    for note in measure.sorted_notes:
+    notes = measure.sorted_notes
+    for i in range(first_note, len(notes)):
+        note = notes[i]
         if note.ignore:
             continue
-        if starting_division is not None:
-            if note.start + measure.start >= starting_division:
-                Tick_offset = round(starting_division * Ticks_per_division)
-                starting_division = None
-            else:
-                continue
-        if play(note, measure.start, drain_output):
+        if play(note, drain_output):
             notes_played += 1
             drain_output = True
-        #midi_set_tempo(bpm)
-        #midi_set_time_signature(time_sig)
     if drain_output:
         midi_drain_output()
     if Verbose:
         trace("  notes played:", notes_played)
     return notes_played
 
-def play(note, measure_start, drain_output):
+def play(note, drain_output):
     r'''Caller needs to do midi_drain_output() if return is 1 (not 0).
     '''
     global Final_tick
 
-    start_tick = round((note.start + measure_start) * Ticks_per_division) - Tick_offset
+    start_tick = round(note.start * Ticks_per_clock) - Tick_offset
     if note.grace is not None:
         # FIX
         trace(f"play: skipping grace note; note={note.note}, {start_tick=}")
+        end_tick = start_tick
         return 0
-    end_tick = round((note.start + measure_start + note.duration) * Ticks_per_division) - Tick_offset
+    end_tick = round((note.start + note.duration_clocks) * Ticks_per_clock) - Tick_offset
     current_tick = midi_tick_time()
     trigger_tick = start_tick - Tick_latency
     if Verbose:
-        trace(f"play: note={note.note}, {start_tick=}, duration={note.duration}, {end_tick=}, "
+        trace(f"play: note={note.note}, {start_tick=}, duration={note.duration_clocks}, {end_tick=}, "
               f"{current_tick=}, {trigger_tick=}")
     if current_tick < trigger_tick:
         if drain_output:
@@ -291,12 +238,8 @@ def run():
     parser = argparse.ArgumentParser()
     parser.add_argument('--tag', '-t', type=int, default=17)
     parser.add_argument('--ppq', '-p', type=int, default=960)
-    parser.add_argument('--latency', '-l', type=float, default=0.005)
+    parser.add_argument('--latency', '-l', type=float, default=0.005, help="in seconds")
     parser.add_argument('--verbose', '-v', action="store_true", default=False)
-    parser.add_argument('--measure', '-m', default=None)
-    #parser.add_argument('--range', '-r', default="", help="start_measure-end_measure")
-    #parser.add_argument('--bpm', '-b', type=int, default=None)
-    #FIX: parser.add_argument("music_file")
 
     args = parser.parse_args()
 
@@ -304,12 +247,7 @@ def run():
 
     try:
         init(args.tag, args.ppq, args.latency, args.verbose)
-        import time
-        time.sleep(10)
-        '''
-        parts = read_musicxml(args.music_file)
-        send_parts(args.measure)
-        '''
+        send_parts()
     finally:
         if Final_tick:
             midi_pause(to_tick=Final_tick + 2)  # give queue a chance to drain before killing it
