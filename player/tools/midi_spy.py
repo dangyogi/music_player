@@ -13,6 +13,7 @@ Err_secs_counts = Counter()
 Err_pulse_counts = Counter()
 Clock_stat_period = None
 Clocks_seen = 0
+Clock_queue = None
 NoteOns_seen = None
 NoteOffs_seen = None
 
@@ -23,7 +24,7 @@ def process_event(event):
     global Clocks_seen, NoteOns_seen, NoteOffs_seen
     global Clock_queue, Clock_ppq, Clock_bpm, Pulses_per_clock, Secs_per_clock, Secs_per_pulse
     show_clock_stats = False
-    if event.type != EventType.CLOCK or Show_clocks:
+    if event.type != EventType.CLOCK:
         #input_time = time.time()
         #trace("input", input_time - pending_time)
         trace("source", event.source, event,
@@ -53,7 +54,8 @@ def process_event(event):
         if event.tag != 0:
             trace(f"CLOCK has non-zero tag {event.tag}")
         elif str(event.source) != CM_timer_addr:
-            trace(f"CLOCK not from Clock Master:Timer, from {event.source}")
+            if Show_clocks:
+                trace(f"CLOCK not from Clock Master:Timer, from {event.source}")
         else:
             if Clock_bpm:
                 now = time.clock_gettime(time.CLOCK_MONOTONIC)
@@ -71,13 +73,14 @@ def process_event(event):
                     Last_clock = now
                 else:
                     show_clock_stats = True
-            pulse_delay = midi_queue_time(Clock_queue) - event.tick
-            err = round(pulse_delay * Secs_per_pulse, 4)
-            if err < 0.0:
-                trace(f"Got pulse err < 0, queue_time={midi_queue_time(Clock_queue)}, "
-                      f"{event.tick=}, {err=}")
-                err = -err
-            Err_pulse_counts[err] += 1
+            if Clock_queue is not None:
+                pulse_delay = midi_queue_time(Clock_queue) - event.tick
+                err = round(pulse_delay * Secs_per_pulse, 4)
+                if err < 0.0:
+                    trace(f"Got pulse err < 0, queue_time={midi_queue_time(Clock_queue)}, "
+                          f"{event.tick=}, {err=}")
+                    err = -err
+                Err_pulse_counts[err] += 1
     elif event.type == EventType.NOTEON:
         NoteOns_seen[str(event.source)] += 1
     elif event.type == EventType.NOTEOFF:

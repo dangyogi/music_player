@@ -195,6 +195,7 @@ class SPPException(WakeUpException):
 def data_to_bpm(data):
     r'''result bpm is rounded to a sensible number of decimals.
     '''
+    # FIX: use exponential scale fn?
     raw = 30 * math.exp(Log_1_01506*data)
     if raw >= 67:
         return int(round(raw))
@@ -683,8 +684,8 @@ def midi_pause(secs=None, to_tick=None, post_fns=None):
         Sel = selectors.DefaultSelector()
         Sel.register(Client._fd, selectors.EVENT_READ, Process_fn)
 
-    if Verbose:
-        trace(f"midi_pause({secs=}, {to_tick=})")
+    #if Verbose:
+    #    trace(f"midi_pause({secs=}, {to_tick=})")
 
     if Client.event_output_pending():
         trace(f"midi_pause: output_pending on entry pending={Client.event_output_pending()}")
@@ -719,7 +720,7 @@ def midi_pause(secs=None, to_tick=None, post_fns=None):
                         post_pending = Client.event_output_pending()
                         if post_pending > pre_pending:
                             trace(f"midi_pause: drain_output False, but something was buffered")
-                except WakeUpExeception as e:
+                except WakeUpException as e:
                     exc = e
                     if e.drain_output:
                         drain_output = True

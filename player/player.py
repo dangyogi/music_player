@@ -28,19 +28,21 @@ def init(tag, ppq, latency, verbose):
     global Synth_port, Clock_master_port, Clock_master_port_addr
 
     Tag = tag
-    Verbose = verbose
+    Verbose = states.Verbose = verbose
     Latency = latency
     Ppq = ppq
     Ticks_per_clock = fraction(Ppq, 24)
     midi_set_verbose(verbose)
     midi_init("Player")
-    Control_port = midi_create_inout_port("Control", connect_from=["Clock Master:To Player"],
-                                                     connect_to=["Clock Master:To Exp_console"])
+    Control_port = midi_create_inout_port("Control", default=False,
+                                               connect_from=["Clock Master:To Player"],
+                                               connect_to=["Clock Master:To Exp_console"])
     Control_port_addr = midi_address((Control_port.client_id, Control_port.port_id))
-    Synth_port = midi_create_output_port("Synth",    connect_to=["Clock Master:To Synth"])
+    Synth_port = midi_create_output_port("Synth",
+                                               connect_to=["Clock Master:To Synth"])
     Clock_master_port = midi_create_inout_port("Clock Master", clock_master=True,
-                                                     connect_from=["Clock Master:Timer"],
-                                                     connect_to=["Clock Master:Input"])
+                                               connect_from=["Clock Master:Timer"],
+                                               connect_to=["Clock Master:Input"])
     Clock_master_port_addr = midi_address((Clock_master_port.client_id, Clock_master_port.port_id))
     midi_set_tag(tag)
     midi_set_ppq(ppq)
@@ -68,6 +70,9 @@ def tempo(value):
     Clocks_per_second = fraction(bpm * 24, 60)
     Tick_latency = int(math.ceil(Clocks_per_second * Latency))  # ticks in latency period
                                                                 # Looks like this will always be 1!
+    if Verbose:
+        trace(f"Got tempo {bpm=}, {Clocks_per_second=}, {Tick_latency=}, forwarding to Clock Master")
+    midi_send_event(SystemEvent(Tempo_status, value), port=Clock_master_port)
     return False
 
 def synth_volume_msb(value):
@@ -120,45 +125,44 @@ def process_event(event):
         return False
     assert event.dest == Control_port_addr, \
            f"process_event({event=}): expected dest {Control_port_addr=}, got {event.dest=}"
+    # Only events from the exp console make it this far!
     if Verbose:
         trace(f"process_event({event=}): {event.source=}, event.type={Event_type_names[event.type]}")
-    if event.type == EventType.SYSTEM:
-        if event.event == 0xF4:
-            return tempo(event.result)
+    if event.type == EventType.SYSTEM and event.event == Tempo_status:
+        return tempo(event.result)
+    if event.type != EventType.CONTROLLER or event.channel == 0:
+        trace(f"process_event({event=}): SYSTEM or channel 0(1) event, "
+               "forwarding to states.process_ch1_event")
         return states.process_ch1_event(event)
-    if event.channel == 0:
-        return states.process_ch1_event(event)
+    # event.type == EventType.CONTROLLER
     if event.channel == 1:
         # All note related settings
-        if event.type != EventType.CONTROLLER:
-            trace(f"process_event({event=}): unknown ch2 event.type, "
-                  f"event.type={Event_type_names[event.type]}, ignored")
-            return False
-        # event is CONTROLLER event.
         if event.param not in Ch2_CC_commands:
             trace(f"process_event({event=}): unknown ch2 event.param, {event.param=:#X}, ignored")
             return False
+        trace(f"process_event({event=}): channel 1(2) {event.param=:#X}, {event.value=}")
         return Ch2_CC_commands[event.param](event.value)
     if event.channel == 2:
         # Global settings: Transpose, Tempo, Synth Volume
-        if event.type == EventType.CONTROLLER:
-            if event.param not in Ch3_CC_commands:
-                trace(f"process_event({event=}): unknown ch3 CONTROLLER event.param, "
-                      f"{event.param=:#X}, ignored")
-                return False
-            return Ch3_CC_commands[event.param](event.value)
-        trace(f"process_event({event=}): unknown ch3 event.type, "
-              f"event.type={Event_type_names[event.type]}, ignored")
-        return False
+        if event.param not in Ch3_CC_commands:
+            trace(f"process_event({event=}): unknown ch3 CONTROLLER event.param, "
+                  f"{event.param=:#X}, ignored")
+            return False
+        trace(f"process_event({event=}): channel 2(3) {event.param=:#X}, {event.value=}")
+        return Ch3_CC_commands[event.param](event.value)
     trace(f"process_event({event=}): unknown channel, {event.channel=}, ignored")
     return False
 
 def send_parts():
+    if Verbose:
+        trace("send_parts called, entering top midi_pause loop")
     try:
         while True:
             midi_pause()
     except states.BackToTopException as e:
         spp = e.spp
+    if Verbose:
+        trace("send_parts entering play loop")
     while True:
         try:
             # FIX: Should this play all parts?

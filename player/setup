@@ -1,0 +1,17 @@
+#!/bin/sh
+
+VENV_BIN=/home/bruce/play/midi/Midi.venv/bin
+BRUCE_BIN=/home/bruce/bin
+
+if ! ps -ef | grep "aseqnet rpi-wired" | grep -v grep > /dev/null
+then
+    echo Starting aseqnet
+    chrt 5 aseqnet rpi-wired &
+fi
+if ! ps -ef | grep fluidsynth | grep -v grep > /dev/null
+then
+    echo Starting fluidsynth
+    chrt 4 $BRUCE_BIN/start_fluidsynth  # starts in background
+fi
+sleep 1
+chrt 6 $VENV_BIN/clock-master
