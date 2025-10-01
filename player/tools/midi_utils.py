@@ -766,14 +766,14 @@ def midi_pause(secs=None, to_tick=None, post_fns=None):
         def tick_override():
             if secs is None:  # to_tick is not None
                 while not Queue_running:
-                    if Verbose:
-                        trace(f"tick_override: queue not running, doing wait_once(None)")
+                    #if Verbose:
+                    #    trace(f"tick_override: queue not running, doing wait_once(None)")
                     wait_once(None)
             if Queue_running:
                 ticks_remaining = to_tick - midi_tick_time()
                 tick_secs = ticks_remaining * Tick_interval
-                if Verbose:
-                    trace(f"tick_override: {ticks_remaining=}, {tick_secs=}")
+                #if Verbose:
+                #    trace(f"tick_override: {ticks_remaining=}, {tick_secs=}")
                 if secs is None or tick_secs < next_secs:
                     return tick_secs
             return next_secs
@@ -995,9 +995,9 @@ def midi_tick_time():
         else:
             delta_t = -Last_clock_time
         ans = Ppc * Clocks + int(round(delta_t / Tick_interval))
-        if Verbose:
-            trace(f"midi_tick_time: {Clocks=}, {Ppc=}, delta_t={round(delta_t, 5)}, "
-                  f"Tick_interval={round(Tick_interval, 5)}, {ans=}")
+        #if Verbose:
+        #    trace(f"midi_tick_time: {Clocks=}, {Ppc=}, delta_t={round(delta_t, 5)}, "
+        #          f"Tick_interval={round(Tick_interval, 5)}, {ans=}")
         return ans
     if Default_queue is not None:
         return Default_queue.get_status().tick_time

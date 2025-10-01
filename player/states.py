@@ -177,11 +177,11 @@ class No_song(BaseState):
 class SPP(No_song):
     def song_position_pointer(self, event):
         global Continue_spp
-        spp = spp.create(event.value)
-        if spp is None:
+        event_spp = spp.create(event.value)
+        if event_spp is None:
             trace(f"{self.name()}.song_position_pointer, {event.value} not found -- ignored")
             return False
-        Continue_spp = spp
+        Continue_spp = event_spp
         trace(f"{self.name()}.song_position_pointer: set to {Continue_spp}, forwarding to Clock Master")
         event.dest = None
         event.tag = midi_utils.Clock_master_tag
@@ -239,6 +239,7 @@ class Running(BaseState):
 
     def end_song(self):
         trace(self.name(), "end_song")
+        midi_stop()
         return self.back_to_top_switch(New_song_state)
 
 
