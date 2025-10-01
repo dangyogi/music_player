@@ -53,6 +53,7 @@ Initialization:
 I/O:
     midi_send_event(event, queue=None, port=None, dest=None, no_defaults=False, drain_output=False)
       -> None
+        Does not set tag
     midi_drain_output() -> None
     midi_pause(secs=None, to_tick=None, post_fns=None) -> None,
         reads and processes events while paused.
@@ -250,6 +251,8 @@ def trace(*msgs):
 def midi_set_verbose(verbose=True):
     global Verbose
     Verbose = verbose
+    if Verbose:
+        trace(f"midi_set_verbose({verbose=})")
 
 def midi_raise_SPPException(raise_spp=True):
     global Raise_SPPException
@@ -711,7 +714,7 @@ def midi_pause(secs=None, to_tick=None, post_fns=None):
                 event = Client.event_input()
                 pre_pending = Client.event_output_pending()
                 try:
-                    if sk.data(event):
+                    if sk.data(event):  # Process_fn
                         post_pending = Client.event_output_pending()
                         if post_pending == pre_pending:
                             trace(f"midi_pause: drain_output True, but nothing new buffered")
@@ -721,6 +724,8 @@ def midi_pause(secs=None, to_tick=None, post_fns=None):
                         if post_pending > pre_pending:
                             trace(f"midi_pause: drain_output False, but something was buffered")
                 except WakeUpException as e:
+                    if Verbose:
+                        trace(f"midi_pause: caught WakeUpException {e=}")
                     exc = e
                     if e.drain_output:
                         drain_output = True
@@ -742,10 +747,14 @@ def midi_pause(secs=None, to_tick=None, post_fns=None):
             if drain_output:
                 Client.drain_output()
         if exc is not None:
+            if Verbose:
+                trace(f"midi_pause: raising {exc=}")
             raise exc
         if Spp and Raise_SPPException:
             spp = Spp
             Spp = None
+            if Verbose:
+                trace("midi_pause: raising SPPException")
             raise SPPException(spp)
 
     if to_tick is None and (secs is None or secs == 0):

@@ -18,6 +18,16 @@ Verbose = False
 Parts = None
 Continue_spp = None
 
+class BackToTopException(WakeUpException):
+    pass
+
+class StartPlayingException(WakeUpException):
+    def __init__(self, drain_output, spp):
+        super().__init__(drain_output)
+        self.spp = spp
+        if Verbose:
+            trace(f"StartPlayingException.__init__({drain_output=}, {spp=})")
+
 class spp:
     r'''Finds the first note who's start is >= spp.
 
@@ -86,12 +96,6 @@ Ch1_CC_commands = {   # Passed event.value
 }
 
 
-class BackToTopException(WakeUpException):
-    def __init__(self, drain_output, spp):
-        super().__init__(drain_output)
-        self.spp = spp
-
-
 class BaseState:
     def enter(self):
         return False
@@ -106,9 +110,15 @@ class BaseState:
             trace(f"{self.name()}.switch({State.name()})")
         return State.enter()
 
-    def backup_switch(self, new_state, spp):
-        trace(f"{self.name()}.backup_switch({new_state.name()})")
-        raise BackToTopException(self.switch(new_state, report=False), spp)
+    def back_to_top_switch(self, new_state):
+        trace(f"{self.name()}.back_to_top_switch({new_state.name()})")
+        drain_output = self.switch(new_state, report=False)
+        raise BackToTopException(drain_output)
+
+    def start_playing_switch(self, new_state, spp):
+        trace(f"{self.name()}.start_playing_switch({new_state.name()})")
+        drain_output = self.switch(new_state, report=False)
+        raise StartPlayingException(drain_output, spp)
 
     def song_select(self, event):
         trace(f"{self.name()}.song_select: ignored")
@@ -131,6 +141,10 @@ class BaseState:
 
     def continue_(self, event):
         trace(f"{self.name()}.continue_: ignored")
+        return False
+
+    def end_song(self):
+        trace(f"{self.name()}.end_song: ignored")
         return False
 
 
@@ -156,7 +170,7 @@ class No_song(BaseState):
         first_measure = Parts[0][1][0]
         if Verbose:
             trace(f"song_select: sending time sig={first_measure.time}")
-        midi_set_time_signature(*first_measure.time)
+        midi_set_time_signature(*first_measure.time)  # sends to Clock Master (and drains)
         # FIX: send key signature?
         return self.switch(New_song_state)
 
@@ -170,6 +184,7 @@ class SPP(No_song):
         Continue_spp = spp
         trace(f"{self.name()}.song_position_pointer: set to {Continue_spp}, forwarding to Clock Master")
         event.dest = None
+        event.tag = midi_utils.Clock_master_tag
         midi_send_event(event, port=midi_utils.Clock_master_port)
         self.switch(Ready_state)
         return True
@@ -179,35 +194,35 @@ class New_song(SPP):
     '''
     def start(self, event):
         trace(self.name(), "START")
-        midi_start()
-        self.backup_switch(Running_state, Start_spp)
+        midi_start()      # sends to Clock Master (and drains)
+        return self.start_playing_switch(Running_state, Start_spp)
 
 class Ready(SPP):
     r'''Parts is not None and Continue_spp is not None.
     '''
     def continue_(self, event):
         trace(self.name(), "CONTINUE")
-        midi_continue()
-        self.backup_switch(Running_state, Continue_spp)
+        midi_continue()   # sends to Clock Master (and drains)
+        return self.start_playing_switch(Running_state, Continue_spp)
 
     def start(self, event):
         trace(self.name(), "START")
-        midi_start()
-        self.backup_switch(Running_state, Start_spp)
+        midi_start()      # sends to Clock Master (and drains)
+        return self.start_playing_switch(Running_state, Start_spp)
 
 class Paused(SPP):
     r'''Parts is not None but Continue_spp is None.
     '''
     def continue_(self, event):
         trace(self.name(), "CONTINUE")
-        midi_continue()
-        # no BackToTopException, continues where stop left off.
+        midi_continue()      # sends to Clock Master (and drains), starts CLOCKS back up
+        # no StartPlayingException, continues where stop left off.
         return self.switch(Running_state)
 
     def start(self, event):
         trace(self.name(), "START")
-        midi_start()
-        self.backup_switch(Running_state, Start_spp)
+        midi_start()      # sends to Clock Master (and drains)
+        return self.start_playing_switch(Running_state, Start_spp)
 
 class Running(BaseState):
     r'''Parts is not None but Continue_spp is None.
@@ -215,16 +230,16 @@ class Running(BaseState):
     def enter(self):
         global Continue_spp
         Continue_spp = None
-        self.run = True
-        while self.run:
-            # FIX: run here!
-            pass
         return False
 
     def stop(self, event):
         trace(self.name(), "STOP")
-        midi_stop()
+        midi_stop()      # sends to Clock Master (and drains)
         return self.switch(Paused_state)
+
+    def end_song(self):
+        trace(self.name(), "end_song")
+        return self.back_to_top_switch(New_song_state)
 
 
 No_song_state = No_song()

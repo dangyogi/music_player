@@ -101,15 +101,14 @@ def init(pass_through_ports):
     trace(f"Client_id={midi_get_client_id()}, Clock_queue={Clock_queue.queue_id}")
     Queues["Clock"] = Clock_queue
     Input_port = midi_create_input_port("Input", connect_from=["Player:Clock-master"])
-    Pass_through_ports = []
+    Pass_through_ports = {}   # {port_name: Port}
     print(f"{pass_through_ports=}")
     for name in pass_through_ports:
         port_name, connect_from, connect_to = name.split('/')
         print(f"init: {port_name=}, {connect_from=}, {connect_to=}")
-        Pass_through_ports.append(midi_create_inout_port(port_name, default=False,
-                                                         connect_from=connect_from.split(','),
-                                                         connect_to=connect_to.split(','),
-                                                        ))
+        Pass_through_ports[port_name] = \
+          midi_create_inout_port(port_name, default=False, connect_from=connect_from.split(','),
+                                                           connect_to=connect_to.split(','))
 
     Timer_port = midi_create_output_port("Timer", default=False,
                                          connect_to=["FLUID Synth:0", "Net Client"])
@@ -133,8 +132,15 @@ def process_event(event):
             trace(f"process_event: SKIPPED CLOCK, from {event.source}, tick={event.tick}, "
                   f"queue_id={event.queue_id}")
         return False
+
+    # special case for ppq and close_queue sent to "To Player" port (from exp console)
+    if event.dest.port_id == Pass_through_ports["To Player"].port_id \
+       and event.type == EventType.CONTROLLER and event.channel == 15 \
+       and event.param in (Clock_master_CC_ppq, Clock_master_CC_close_queue):
+        return process_CM_control_change(event)
+
     # events sent to a Pass_through_port should just forwarded out the same Pass_through_port
-    for port in Pass_through_ports:
+    for port in Pass_through_ports.values():
         if event.dest.port_id == port.port_id:
             forward_event(event)
             return True
@@ -145,6 +151,8 @@ def process_event(event):
         if Verbose:
             trace(f"process_event: event type={Event_type_names[event.type]} in Event_fns, "
                   f"calling Event_fn")
+        # start/stop/continue/songpos/songsel/System Common (tempo/time_sig)
+        # all of these are sent out Timer_port
         return Event_fns[event.type](event)
     if event.type == EventType.CONTROLLER and event.channel == 15:
         return process_CM_control_change(event)
@@ -162,9 +170,8 @@ def forward_event(event, drain_output=False):
     '''
     port = event.dest
     event.dest = None
-    #if event.tag and event.tick:
-    if event.tag:
-        # send through queue
+    if event.tag:  # all events should have a tag
+        # send through queue, even without tick set
         if event.tag in Queues:
             if Verbose:
                 trace(f"forward_event: tag={event.tag} in Queues, tick={event.tick}, "
@@ -172,18 +179,21 @@ def forward_event(event, drain_output=False):
                       f"queue_ticks={midi_queue_time(Queues[event.tag])}")
             midi_send_event(event, queue=Queues[event.tag], port=port, drain_output=drain_output)
             return
-        trace(f"forward_event: {event.tag=} not in Queues -- forwarding direct")
-    if Verbose:
-        trace(f"forward_event: tag={event.tag}, source={event.source}, "
+        trace(f"forward_event: WARNING {event.tag=} unregistered!, source={event.source}, "
               f"forwarding direct to port={Port_names[port.port_id]}")
+    else:
+        if event.tick:
+            trace(f"forward_event: WARNING missing event.tag!, source={event.source}, "
+                  f"forwarding direct to port={Port_names[port.port_id]}")
+    # FIX: use Clock_queue?
     midi_send_event(event, port=port, drain_output=drain_output)
 
 def process_CM_start(event):
-    r'''No queuing, queue not running.
+    r'''Start all queues.  Forward to Timer_port with tick=0.
     '''
     Pause_fn_list.append(start_queues)
     if Verbose:
-        trace(f"process_CM_start: forwarding event to Timer_port")
+        trace(f"process_CM_start: will start all queues, forwarding event to Timer_port")
     event.tick = 0
     event.dest = None
     midi_send_event(event, queue=Clock_queue, port=Timer_port)
@@ -202,11 +212,11 @@ def start_queues():
     return True
 
 def process_CM_continue(event):
-    r'''No queuing, queue not running.
+    r'''Continue all queues.  Forward to Timer_port with tick=0.
     '''
     Pause_fn_list.append(continue_queues)
     if Verbose:
-        trace(f"process_CM_continue: forwarding event to Timer_port")
+        trace(f"process_CM_continue: will continue all queues, forwarding event to Timer_port")
     event.tick = 0
     event.dest = None
     midi_send_event(event, queue=Clock_queue, port=Timer_port)
@@ -223,10 +233,10 @@ def continue_queues():
     return True
 
 def process_CM_stop(event):
-    r'''May be queued.
+    r'''Stop all queues.  Forward to Timer_port with tick=0.
     '''
     if Verbose:
-        trace(f"process_CM_stop: queue?")
+        trace(f"process_CM_stop: will stop all queues, forwarding event to Timer_port")
     Pause_fn_list.append(stop_queues)
     if Verbose:
         trace(f"process_CM_stop: not queued, will stop all queues")
@@ -255,11 +265,11 @@ def stop_queues():
         return True
     return False
 
-def process_CM_songpos(event):
+def process_CM_forward(event):
     if Verbose:
-        trace(f"process_CM_songpos: queue?")
+        trace(f"process_CM_stop: forwarding event to Timer_port")
     if Verbose:
-        trace(f"process_CM_songpos: not queued, forwarding to Timer_port")
+        trace(f"process_CM_forward: not queued, forwarding to Timer_port")
     event.tick = 0
     event.dest = None
     midi_send_event(event, queue=Clock_queue, port=Timer_port)
@@ -294,6 +304,13 @@ def set_queue_tempos(bpm):
     for q in Queues.values():
         q.set_tempo(bpm=bpm, ppq=q.ppq_setting)
     return False
+
+def recalc_clock():
+    global Secs_per_tick, Latency_in_ticks
+    Secs_per_tick = 60 / (Bpm * Clock_ppq)
+    Latency_in_ticks = int(math.ceil(Latency / Secs_per_tick - 1e-3))
+    #if Verbose:
+    trace(f"recalc_clock: {Bpm=}, {Clock_ppq=}, {Secs_per_tick=}, {Latency_in_ticks=}")
 
 def process_CM_control_change(event):
     r'''Set ppq for tag, or close_queue
@@ -340,20 +357,15 @@ def close_queue(tag):
     return False
 
 Event_fns = {   # These are given different names than the ones in midi_utils to avoid conflicts
-    EventType.START: process_CM_start,
-    EventType.CONTINUE: process_CM_continue,
-    EventType.STOP: process_CM_stop,
-    EventType.SONGPOS: process_CM_songpos,
-    EventType.SYSTEM: process_CM_system,
+    EventType.START: process_CM_start,        # start all queues,        send out Timer_port, tick=0
+    EventType.CONTINUE: process_CM_continue,  # continue all queues,     send out Timer_port, tick=0
+    EventType.STOP: process_CM_stop,          # stop all queues,         send out Timer_port, tick=0
+    EventType.SONGPOS: process_CM_forward,    # <no processing>          send out Timer_port, tick=0
+    EventType.SONGSEL: process_CM_forward,    # <no processing>          send out Timer_port, tick=0
+    EventType.SYSTEM: process_CM_system,      # tempo: set_tempo on all queues
+                                              # time_sig: <no processing>
+                                              #                          send out Timer_port, tick=0
 }
-
-def recalc_clock():
-    global Secs_per_tick, Latency_in_ticks
-    Secs_per_tick = 60 / (Bpm * Clock_ppq)
-    Latency_in_ticks = int(math.ceil(Latency / Secs_per_tick - 1e-3))
-    #if Verbose:
-    trace(f"recalc_clock: {Bpm=}, {Clock_ppq=}, {Secs_per_tick=}, {Latency_in_ticks=}")
-
 
 def send_clocks():
     global Last_clock_tick_sent, Pause_fn_list, Clocks_sent
@@ -376,8 +388,7 @@ def send_clocks():
                 Last_clock_tick_sent = tick
                 #if Verbose:
                 #    trace("send_clocks sending tick", tick)
-                midi_send_event(ClockEvent(tick=tick, queue_id=Clock_queue.queue_id),
-                                port=Timer_port)
+                midi_send_event(ClockEvent(tick=tick), queue=Clock_queue, port=Timer_port)
                 Clocks_sent += 1
                 #if Verbose:
                 #    print('.', end='')

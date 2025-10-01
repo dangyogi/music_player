@@ -86,17 +86,21 @@ def process_event(event):
     elif event.type == EventType.NOTEOFF:
         NoteOffs_seen[str(event.source)] += 1
     elif event.type == EventType.START and str(event.source) == CM_timer_addr:
-        Clocks_seen = 0
-        NoteOns_seen = Counter()
-        NoteOffs_seen = Counter()
-        Clock_queue = midi_get_named_queue("Clock")
-        queue_tempo = Clock_queue.get_tempo()
-        Clock_ppq = queue_tempo.ppq
-        Clock_bpm = queue_tempo.bpm
-        Pulses_per_clock = Clock_ppq // 24
-        Secs_per_clock = 60.0 / (Clock_bpm * 24)
-        Secs_per_pulse = 60 / (Clock_bpm * Clock_ppq)
-        trace(f"START: {Clock_ppq=}, {Clock_bpm=}, {Pulses_per_clock=}, {Secs_per_pulse=}")
+        try:
+            Clock_queue = midi_get_named_queue("Clock")
+        except ALSAError:
+            pass
+        else:
+            Clocks_seen = 0
+            NoteOns_seen = Counter()
+            NoteOffs_seen = Counter()
+            queue_tempo = Clock_queue.get_tempo()
+            Clock_ppq = queue_tempo.ppq
+            Clock_bpm = queue_tempo.bpm
+            Pulses_per_clock = Clock_ppq // 24
+            Secs_per_clock = 60.0 / (Clock_bpm * 24)
+            Secs_per_pulse = 60 / (Clock_bpm * Clock_ppq)
+            trace(f"START: {Clock_ppq=}, {Clock_bpm=}, {Pulses_per_clock=}, {Secs_per_pulse=}")
     elif event.type == EventType.STOP and str(event.source) == CM_timer_addr:
         #def str_seen(seen):
         #    return ', '.join(f"{str(addr)}: {count}" for addr, count in sorted(seen.items()))

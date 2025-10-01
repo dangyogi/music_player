@@ -32,15 +32,19 @@ def init(tag, ppq, latency, verbose):
     Latency = latency
     Ppq = ppq
     Ticks_per_clock = fraction(Ppq, 24)
+    trace(f"init: {Tag=}, {Verbose=}, {Latency=}, {Ppq=}, {Ticks_per_clock=}")
     midi_set_verbose(verbose)
     midi_init("Player")
     Control_port = midi_create_inout_port("Control", default=False,
                                                connect_from=["Clock Master:To Player"],
                                                connect_to=["Clock Master:To Exp_console"])
     Control_port_addr = midi_address((Control_port.client_id, Control_port.port_id))
+
+    # default port
     Synth_port = midi_create_output_port("Synth",
                                                connect_to=["Clock Master:To Synth"])
-    Clock_master_port = midi_create_inout_port("Clock Master", clock_master=True,
+
+    Clock_master_port = midi_create_inout_port("Clock Master", default=False, clock_master=True,
                                                connect_from=["Clock Master:Timer"],
                                                connect_to=["Clock Master:Input"])
     Clock_master_port_addr = midi_address((Clock_master_port.client_id, Clock_master_port.port_id))
@@ -67,13 +71,13 @@ scale_tempo = exponential(1.01506, 30)
 def tempo(value):
     global Clocks_per_second, Tick_latency
     bpm = scale_tempo(value)   # bpm (beats per minute).  "beat" == "quarter note"
-    Clocks_per_second = fraction(bpm * 24, 60)
+    Clocks_per_second = bpm * 24 / 60
     Tick_latency = int(math.ceil(Clocks_per_second * Latency))  # ticks in latency period
                                                                 # Looks like this will always be 1!
     if Verbose:
         trace(f"Got tempo {bpm=}, {Clocks_per_second=}, {Tick_latency=}, forwarding to Clock Master")
-    midi_send_event(SystemEvent(Tempo_status, value), port=Clock_master_port)
-    return False
+    midi_send_event(SystemEvent(Tempo_status, value, tag=Tag), port=Clock_master_port)
+    return True
 
 def synth_volume_msb(value):
     global Synth_volume_msb
@@ -154,23 +158,41 @@ def process_event(event):
     return False
 
 def send_parts():
-    if Verbose:
-        trace("send_parts called, entering top midi_pause loop")
-    try:
-        while True:
-            midi_pause()
-    except states.BackToTopException as e:
-        spp = e.spp
-    if Verbose:
-        trace("send_parts entering play loop")
     while True:
-        try:
-            # FIX: Should this play all parts?
-            info, measures = states.Parts[spp.part_no]
-            trace("part", info.id)
-            send_measures(measures, spp.measure_no, spp.note_no)
-        except states.BackToTopException as e:
-            spp = e.spp
+        if Verbose:
+            trace("send_parts called, entering top midi_pause loop")
+        while True:
+            try:
+                midi_pause()
+            except states.BackToTopException:
+                trace("send_parts: WARNING caught BackToTopException in start up")
+                pass  # stay in loop
+            except states.StartPlayingException as e:
+                if Verbose:
+                    trace("send_parts caught StartPlayingException in start up")
+                spp = e.spp
+                break
+        while True:  # loops on BackToTopException
+            if Verbose:
+                trace("send_parts starting play loop")
+            try:
+                if Verbose:
+                    trace("send_parts starting play")
+                # FIX: Should this play all parts?  If so, set measure_no to 0 after first part
+                info, measures = states.Parts[spp.part_no]
+                trace("part", info.id)
+                send_measures(measures, spp.measure_no, spp.note_no)
+                states.State.end_song()
+                trace("send_parts: WARNING end_song did not raise Exception")
+                break
+            except states.StartPlayingException as e:
+                if Verbose:
+                    trace("send_parts caught BackToTopException playing")
+                spp = e.spp
+            except states.BackToTopException:
+                if Verbose:
+                    trace("send_parts caught BackToTopException playing")
+                break
 
 def send_measures(measures, first_measure, first_note):
     global Tick_offset
@@ -181,7 +203,9 @@ def send_measures(measures, first_measure, first_note):
         measure = measures[i]
         trace(f"send_measures: measure={measure.number}, index={measure.index}, {i=}, "
               f"start={measure.start}, duration_clocks={measure.duration_clocks}")
-        if measure.time:
+        if hasattr(measure, "time"):
+            trace(f"send_measures: measure {measure.number} has time sig, calling "
+                   "midi_set_time_signature")
             midi_set_time_signature(*measure.time)
         notes_played += send_notes(measure, first_note)
         first_note = 0
