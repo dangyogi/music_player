@@ -1,8 +1,5 @@
 #!/bin/sh
 
-VENV_BIN=/home/bruce/play/midi/Midi.venv/bin
-BRUCE_BIN=/home/bruce/bin
-
 if ! ps -ef | grep "aseqnet rpi-wired" | grep -v grep > /dev/null
 then
     echo Starting aseqnet
@@ -11,7 +8,7 @@ fi
 if ! ps -ef | grep fluidsynth | grep -v grep > /dev/null
 then
     echo Starting fluidsynth
-    chrt 4 $BRUCE_BIN/start_fluidsynth  # starts in background
+    # -K <num midi channels> 5 is out of range??
+    # -g <master gain:0-10, default 0.2>
+    chrt 4 /usr/bin/fluidsynth -a alsa -m alsa_seq -g 5 -i -s /usr/share/sounds/sf2/FluidR3_GM.sf2 &
 fi
-sleep 1
-chrt 6 $VENV_BIN/clock-master

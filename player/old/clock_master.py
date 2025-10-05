@@ -133,12 +133,6 @@ def process_event(event):
                   f"queue_id={event.queue_id}")
         return False
 
-    # special case for ppq and close_queue sent to "To Player" port (from exp console)
-    if event.dest.port_id == Pass_through_ports["To Player"].port_id \
-       and event.type == EventType.CONTROLLER and event.channel == 15 \
-       and event.param in (Clock_master_CC_ppq, Clock_master_CC_close_queue):
-        return process_CM_control_change(event)
-
     # events sent to a Pass_through_port should just forwarded out the same Pass_through_port
     for port in Pass_through_ports.values():
         if event.dest.port_id == port.port_id:
@@ -416,8 +410,7 @@ def run():
     parser.add_argument('--latency', '-l', type=float, default=0.005)
     parser.add_argument('--verbose', '-v', action="store_true", default=False)
     parser.add_argument('pass_through_ports', nargs='*',
-                        default=["To Player/Net Client/Player:Control",
-                                 "To Exp_console/Player:Control/Net Client",
+                        default=[#FIX: "To Exp_console/Player:Control/Net Client",
                                  "To Synth/Player:Synth/FLUID Synth",
                                 ])
 

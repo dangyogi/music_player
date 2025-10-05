@@ -3,6 +3,7 @@
 r'''State machine for song_select, song_position_pointer, start, stop, continue events.
 '''
 
+import time
 from pathlib import Path
 from bisect import bisect_left
 
@@ -17,16 +18,17 @@ Verbose = False
 
 Parts = None
 Continue_spp = None
+Channel = 0
 
 class BackToTopException(WakeUpException):
     pass
 
 class StartPlayingException(WakeUpException):
-    def __init__(self, drain_output, spp):
-        super().__init__(drain_output)
+    def __init__(self, spp):
+        super().__init__()
         self.spp = spp
         if Verbose:
-            trace(f"StartPlayingException.__init__({drain_output=}, {spp=})")
+            trace(f"StartPlayingException.__init__({spp=})")
 
 class spp:
     r'''Finds the first note who's start is >= spp.
@@ -68,6 +70,9 @@ class spp:
                         else:
                             spp.note_no = bisect_left([note.start for note in measure.sorted_notes],
                                                       spp.spp_clocks)
+                        if Verbose:
+                            trace(f"spp.create({spp_16ths=}): part_no={spp.part_no}, "
+                                  f"measure_no={spp.measure_no}, note_no={spp.note_no}")
                         return spp
         trace(f"{spp=} not found in song, largest spp is {Parts[0][1][-1].sorted_notes[-1].start}")
         return None
@@ -97,8 +102,10 @@ Ch1_CC_commands = {   # Passed event.value
 
 
 class BaseState:
+    r'''These don't return anything.  Caller must eventually call midi_drain_output.
+    '''
     def enter(self):
-        return False
+        pass
 
     def name(self):
         return self.__class__.__name__
@@ -108,44 +115,38 @@ class BaseState:
         State = new_state
         if report:
             trace(f"{self.name()}.switch({State.name()})")
-        return State.enter()
+        State.enter()
 
     def back_to_top_switch(self, new_state):
         trace(f"{self.name()}.back_to_top_switch({new_state.name()})")
-        drain_output = self.switch(new_state, report=False)
-        raise BackToTopException(drain_output)
+        self.switch(new_state, report=False)
+        raise BackToTopException()
 
     def start_playing_switch(self, new_state, spp):
         trace(f"{self.name()}.start_playing_switch({new_state.name()})")
-        drain_output = self.switch(new_state, report=False)
-        raise StartPlayingException(drain_output, spp)
+        self.switch(new_state, report=False)
+        raise StartPlayingException(spp)
 
     def song_select(self, event):
         trace(f"{self.name()}.song_select: ignored")
-        return False
 
     def song_position_pointer(self, event):
         trace(f"{self.name()}.song_position_pointer: ignored")
-        return False
 
     # These last three arrive here from the exp console.  These will call midi_start/stop/continue,
     # but the events echoed back from the Clock_master do not come here.
 
     def start(self, event):
         trace(f"{self.name()}.start: ignored")
-        return False
 
     def stop(self, event):
         trace(f"{self.name()}.stop: ignored")
-        return False
 
     def continue_(self, event):
         trace(f"{self.name()}.continue_: ignored")
-        return False
 
     def end_song(self):
         trace(f"{self.name()}.end_song: ignored")
-        return False
 
 
 class No_song(BaseState):
@@ -170,9 +171,9 @@ class No_song(BaseState):
         first_measure = Parts[0][1][0]
         if Verbose:
             trace(f"song_select: sending time sig={first_measure.time}")
-        midi_set_time_signature(*first_measure.time)  # sends to Clock Master (and drains)
+        midi_set_time_signature(*first_measure.time, port=Control_port)  # sends to Exp Console
         # FIX: send key signature?
-        return self.switch(New_song_state)
+        self.switch(New_song_state)
 
 class SPP(No_song):
     def song_position_pointer(self, event):
@@ -183,11 +184,8 @@ class SPP(No_song):
             return False
         Continue_spp = event_spp
         trace(f"{self.name()}.song_position_pointer: set to {Continue_spp}, forwarding to Clock Master")
-        event.dest = None
-        event.tag = midi_utils.Clock_master_tag
-        midi_send_event(event, port=midi_utils.Clock_master_port)
+        midi_spp(event.value)
         self.switch(Ready_state)
-        return True
 
 class New_song(SPP):
     r'''Parts is not None but Continue_spp is None.
@@ -195,7 +193,7 @@ class New_song(SPP):
     def start(self, event):
         trace(self.name(), "START")
         midi_start()      # sends to Clock Master (and drains)
-        return self.start_playing_switch(Running_state, Start_spp)
+        self.start_playing_switch(Running_state, Start_spp)
 
 class Ready(SPP):
     r'''Parts is not None and Continue_spp is not None.
@@ -203,12 +201,12 @@ class Ready(SPP):
     def continue_(self, event):
         trace(self.name(), "CONTINUE")
         midi_continue()   # sends to Clock Master (and drains)
-        return self.start_playing_switch(Running_state, Continue_spp)
+        self.start_playing_switch(Running_state, Continue_spp)
 
     def start(self, event):
         trace(self.name(), "START")
         midi_start()      # sends to Clock Master (and drains)
-        return self.start_playing_switch(Running_state, Start_spp)
+        self.start_playing_switch(Running_state, Start_spp)
 
 class Paused(SPP):
     r'''Parts is not None but Continue_spp is None.
@@ -217,12 +215,12 @@ class Paused(SPP):
         trace(self.name(), "CONTINUE")
         midi_continue()      # sends to Clock Master (and drains), starts CLOCKS back up
         # no StartPlayingException, continues where stop left off.
-        return self.switch(Running_state)
+        self.switch(Running_state)
 
     def start(self, event):
         trace(self.name(), "START")
         midi_start()      # sends to Clock Master (and drains)
-        return self.start_playing_switch(Running_state, Start_spp)
+        self.start_playing_switch(Running_state, Start_spp)
 
 class Running(BaseState):
     r'''Parts is not None but Continue_spp is None.
@@ -230,17 +228,19 @@ class Running(BaseState):
     def enter(self):
         global Continue_spp
         Continue_spp = None
-        return False
 
     def stop(self, event):
         trace(self.name(), "STOP")
         midi_stop()      # sends to Clock Master (and drains)
-        return self.switch(Paused_state)
+        #time.sleep(0.01)
+        midi_send_event(ControlChangeEvent(Channel, 0x7B, 0)) # All Notes OFF (ignored w/sleep 0.01)
+        #midi_send_event(ControlChangeEvent(Channel, 0x78, 0))  # Sound Off
+        self.switch(Paused_state)
 
     def end_song(self):
         trace(self.name(), "end_song")
         midi_stop()
-        return self.back_to_top_switch(New_song_state)
+        self.back_to_top_switch(New_song_state)
 
 
 No_song_state = No_song()
@@ -253,20 +253,22 @@ Running_state = Running()
 State = No_song_state
 
 def process_ch1_event(event):
+    r'''Doesn't return anything.  Caller must eventually call midi_drain_output.
+    '''
     # Playback settings: Start, Stop, Continue, SPP, End/Loop at, Song Select
     if event.type == EventType.CONTROLLER:
         if event.param not in Ch1_CC_commands:
             trace(f"process_ch1_event({event=}): unknown ch1 event.param, {event.param=:#X}, ignored")
-            return False
+            return
         method = Ch1_CC_commands[event.param]
         param = event.value
     else:
         if event.type not in Ch1_commands:
-            print(f"process_ch1_event({event=}): unknown ch1 event.type, {event.type=}, ignored")
-            return False
+            trace(f"process_ch1_event({event=}): unknown ch1 event.type, {event.type=}, ignored")
+            return
         method = Ch1_commands[event.type]
         param = event
     if Verbose:
         trace(f"states.process_ch1_event calling {method=} on {State.name()} with {param=}")
-    return getattr(State, method)(param)
+    getattr(State, method)(param)
 
