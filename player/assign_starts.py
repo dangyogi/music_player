@@ -133,7 +133,7 @@ class assign_measure:
 
                 # process ties, this sets child.ignore on all but first note in tie.
                 # This gets done before sorting the notes, so that tied notes are excluded.
-                if not child.ignore:
+                if not child.ignore and child.grace is None:
                     child_end = child.start + child.duration_clocks
                     links_to_last = (child.note, child_end) in Last_tie_notes
                     tie_start = 'start' in child.tie

@@ -288,7 +288,7 @@ def make_pitch(name, props):
     if not hasattr(ans, 'alter'):
         ans.alter = 0
     # alter is 1 for sharp.  Not sure what it is for flat.
-    if ans.alter not in (-1, 0, 1, 2):
+    if ans.alter not in (-2, -1, 0, 1, 2):
         print("make_pitch got unknown alter", ans.alter)
     ans.midi_note = Notes[ans.step] + 12*(ans.octave + 1) + ans.alter
     return name, ans

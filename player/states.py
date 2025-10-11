@@ -145,7 +145,7 @@ class BaseState:
     def continue_(self, event):
         trace(f"{self.name()}.continue_: ignored")
 
-    def end_song(self):
+    def end_song(self, final_clock):
         trace(f"{self.name()}.end_song: ignored")
 
 
@@ -183,7 +183,7 @@ class SPP(No_song):
             trace(f"{self.name()}.song_position_pointer, {event.value} not found -- ignored")
             return False
         Continue_spp = event_spp
-        trace(f"{self.name()}.song_position_pointer: set to {Continue_spp}, forwarding to Clock Master")
+        trace(f"{self.name()}.song_position_pointer: set to {Continue_spp}")
         midi_spp(event.value)
         self.switch(Ready_state)
 
@@ -192,7 +192,7 @@ class New_song(SPP):
     '''
     def start(self, event):
         trace(self.name(), "START")
-        midi_start()      # sends to Clock Master (and drains)
+        midi_start()      # needs midi_drain_output
         self.start_playing_switch(Running_state, Start_spp)
 
 class Ready(SPP):
@@ -200,12 +200,12 @@ class Ready(SPP):
     '''
     def continue_(self, event):
         trace(self.name(), "CONTINUE")
-        midi_continue()   # sends to Clock Master (and drains)
+        midi_continue()   # needs midi_drain_output
         self.start_playing_switch(Running_state, Continue_spp)
 
     def start(self, event):
         trace(self.name(), "START")
-        midi_start()      # sends to Clock Master (and drains)
+        midi_start()      # needs midi_drain_output
         self.start_playing_switch(Running_state, Start_spp)
 
 class Paused(SPP):
@@ -213,13 +213,13 @@ class Paused(SPP):
     '''
     def continue_(self, event):
         trace(self.name(), "CONTINUE")
-        midi_continue()      # sends to Clock Master (and drains), starts CLOCKS back up
+        midi_continue()      # needs midi_drain_output
         # no StartPlayingException, continues where stop left off.
         self.switch(Running_state)
 
     def start(self, event):
         trace(self.name(), "START")
-        midi_start()      # sends to Clock Master (and drains)
+        midi_start()      # needs midi_drain_output
         self.start_playing_switch(Running_state, Start_spp)
 
 class Running(BaseState):
@@ -230,16 +230,23 @@ class Running(BaseState):
         Continue_spp = None
 
     def stop(self, event):
-        trace(self.name(), "STOP")
-        midi_stop()      # sends to Clock Master (and drains)
+        clocks_sent = midi_stop()      # needs midi_drain_output
+        trace(self.name(), "STOP: clocks_sent", clocks_sent)
         #time.sleep(0.01)
         midi_send_event(ControlChangeEvent(Channel, 0x7B, 0)) # All Notes OFF (ignored w/sleep 0.01)
         #midi_send_event(ControlChangeEvent(Channel, 0x78, 0))  # Sound Off
         self.switch(Paused_state)
 
-    def end_song(self):
-        trace(self.name(), "end_song")
-        midi_stop()
+    def end_song(self, final_clock):
+        trace(self.name(), "end_song: final_clock", final_clock)
+        if final_clock:
+            if Verbose:
+                print(f"  calling midi_pause(to_clock={final_clock + 2})")
+            midi_pause(to_clock=final_clock + 2)  # give queue a chance to drain before stopping it
+            if Verbose:
+                print(f"  midi_pause done: {midi_queue_time()=}")
+        clocks_sent = midi_stop()
+        print("  final_clock", final_clock)
         self.back_to_top_switch(New_song_state)
 
 

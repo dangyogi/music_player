@@ -123,6 +123,7 @@ def process_event(event):
         midi_send_event(event)
 
 def send_parts():
+    global Final_clock
     while True:
         if Verbose:
             trace("send_parts called, entering top midi_pause loop")
@@ -138,6 +139,7 @@ def send_parts():
                 if Verbose:
                     trace("send_parts caught StartPlayingException in start up")
                 spp = e.spp
+                Final_clock = 0
                 break
         while True:  # loops on BackToTopException
             if Verbose:
@@ -149,7 +151,7 @@ def send_parts():
                 info, measures = states.Parts[spp.part_no]
                 trace("part", info.id)
                 send_measures(measures, spp.measure_no, spp.note_no)
-                states.State.end_song()
+                states.State.end_song(Final_clock)
                 trace("send_parts: WARNING end_song did not raise Exception")
                 break
             except states.StartPlayingException as e:
@@ -200,11 +202,10 @@ def play(note):
 
     start_clock = note.start
     if note.grace is not None:
-        # FIX
-        trace(f"play: skipping grace note; note={note.note}, {start_tick=}")
-        end_clock = start_clock
-        return
-    end_clock = note.start + note.duration_clocks
+        trace(f"play: grace note; note={note.note}, {note.start=} -- setting end == start")
+        end_clock = note.start
+    else:
+        end_clock = note.start + note.duration_clocks
     current_clock = midi_queue_time()
     trigger_clock = start_clock - Latency_clocks
     if Verbose:
@@ -214,15 +215,16 @@ def play(note):
         if Verbose:
             trace(f"play calling midi_pause, to_clock={trigger_clock}")
         midi_pause(to_clock=trigger_clock)
-    note_on, note_off = prepare_note(note, start_clock, end_clock)
+    note_on, note_off, note_end_clock = prepare_note(note, start_clock, end_clock)
     midi_send_event(note_on)
     midi_send_event(note_off)
-    if end_clock > Final_clock:
-        Final_clock = end_clock
+    if note_end_clock > Final_clock:
+        Final_clock = note_end_clock
 
 def prepare_note(note, start_clock, end_clock):
     return (NoteOnEvent(note.midi_note + Transpose, states.Channel, 43, tick=to_ticks(start_clock)),
-            NoteOffEvent(note.midi_note + Transpose, states.Channel, 0, tick=to_ticks(end_clock)))
+            NoteOffEvent(note.midi_note + Transpose, states.Channel, 0, tick=to_ticks(end_clock)),
+            end_clock)
 
 def run():
     import argparse
@@ -242,8 +244,9 @@ def run():
     finally:
         if Final_clock:
             if Verbose:
-                trace(f"run.finally calling midi_pause, to_clock={Final_clock + 2}")
+                trace(f"run.finally {Final_clock=}, calling midi_pause to_clock={Final_clock + 2}")
             midi_pause(to_clock=Final_clock + 2)  # give queue a chance to drain before killing it
+            trace(f"midi_pause done: {midi_queue_time()=}")
         midi_stop()
         #midi_pause(0.5)
         midi_close()

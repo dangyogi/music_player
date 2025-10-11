@@ -97,7 +97,7 @@ To timing and queues:
         Sends Time Signature SystemEvent if port is set.
     midi_set_tempo(bpm) -> None, sets tempo on all queues, caller must call midi_drain_output
     midi_start() -> None, starts all queues, caller must call midi_drain_output
-    midi_stop() -> None, stops all queues, caller must call midi_drain_output
+    midi_stop() -> Clocks_sent, stops all queues, caller must call midi_drain_output
     midi_continue() -> None, continues all queues, caller must call midi_drain_output
     midi_spp(position) -> None, updates Queue_sync_ticks, caller must call midi_drain_output
 '''
@@ -174,6 +174,7 @@ Clock_interval = None  # secs between clocks at bpm * Clocks_per_quarter_note
 Queue_sync_ticks = 0   # ticks to add to queue ticks to sync with last SPP
 Do_start = False       # continue will do start, rather than continue, to clear the queue
 Clock_advance = 4      # max CLOCK events to queue up.  333 mSec at 30 bpm, 50 mSec at 200 bpm
+Clocks_sent = 0        # since START
 Next_clock_to_queue = None
 Furthest_behind = None
 Queue_running = False
@@ -599,9 +600,8 @@ def midi_pause(secs=None, to_clock=None, post_fns=None):
 
     if Verbose:
         trace(f"midi_pause({secs=}, {to_clock=}): {Next_clock_to_queue=}")
-
-    if Client.event_output_pending():
-        trace(f"midi_pause: output_pending on entry pending={Client.event_output_pending()}")
+        if Client.event_output_pending():
+            trace(f"midi_pause: output_pending on entry pending={Client.event_output_pending()}")
 
     if secs is not None:
         next_secs = secs
@@ -618,7 +618,7 @@ def midi_pause(secs=None, to_clock=None, post_fns=None):
 
         wait_secs can be None or 0.
         '''
-        global Next_clock_to_queue, Furthest_behind
+        global Next_clock_to_queue, Furthest_behind, Clocks_sent
         nonlocal secs, end
         if Verbose:
             trace(f"wait_once({wait_secs=})")
@@ -636,6 +636,7 @@ def midi_pause(secs=None, to_clock=None, post_fns=None):
                 # queue up another Clock_advance CLOCK events.
                 for clock in range(Next_clock_to_queue, Next_clock_to_queue + Clock_advance): 
                     midi_send_event(ClockEvent(tick=to_ticks(clock)), port=Clock_port)
+                    Clocks_sent += 1
                 Next_clock_to_queue += Clock_advance
             wait_secs2 = (Next_clock_to_queue - now - 1) * Clock_interval
             if wait_secs is None or wait_secs2 < wait_secs:
@@ -799,6 +800,7 @@ def midi_set_tempo(bpm):
 
 def midi_start(reset_sync_ticks=True):
     global Queue_running, Queue_sync_ticks, Next_clock_to_queue, Drain_needed, Do_start
+    global Clocks_sent
     if Verbose:
         trace("midi_start")
     if Queues:
@@ -809,6 +811,7 @@ def midi_start(reset_sync_ticks=True):
         Queue_running = True
         Drain_needed = True
         Do_start = False
+        Clocks_sent = 0
         if reset_sync_ticks:  # not called from continue
             if Verbose:
                 trace("midi_start: reseting Queue_sync_ticks and Next_clock_to_queue to 0")
@@ -826,6 +829,7 @@ def midi_stop():
             queue.stop()   # drain_output needs to be called
         Queue_running = False
         Drain_needed = True
+    return Clocks_sent
 
 def midi_continue():
     global Queue_running, Drain_needed, Do_start
@@ -841,7 +845,7 @@ def midi_continue():
             trace("midi_continue: continuing queues")
         for queue in Queues.values():
             queue.continue_()   # drain_output needs to be called
-        Queue_running = False
+        Queue_running = True
         Drain_needed = True
 
 def midi_spp(song_position):
