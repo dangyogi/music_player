@@ -15,20 +15,19 @@ from . import states
 from .tools.midi_utils import *
 
 
-Latency = None         # secs, default 0.005
-Latency_clocks = None  # number of clocks in Latency period, altered by change in Tempo
+Max_note_on_advance_clocks = None  # max clocks that note on may be advanced
 Final_clock = 0
 
 Transpose = 0
 
-def init(ppq, latency, verbose):
-    global Verbose, Latency, Ticks_per_clock, Control_port, Control_port_addr
+def init(ppq, max_advance, verbose):
+    global Verbose, Max_note_on_advance_clocks, Ticks_per_clock, Control_port, Control_port_addr
     global Synth_port, Timer_port, Timer_port_addr
 
     Verbose = states.Verbose = verbose
-    Latency = latency
+    Max_note_on_advance_clocks = max_advance
     Ticks_per_clock = fraction(ppq, 24)
-    trace(f"init: {ppq=}, {Verbose=}, {Latency=}, {Ticks_per_clock=}")
+    trace(f"init: {ppq=}, {Verbose=}, {Max_note_on_advance_clocks=}, {Ticks_per_clock=}")
     midi_set_verbose(verbose)
     midi_init("Player")
     Control_port = states.Control_port =  midi_create_inout_port("Control", default=False,
@@ -60,14 +59,14 @@ def transpose(value):
 scale_tempo = exponential(1.01506, 30)
 
 def tempo(value):
-    global Clocks_per_second, Latency_clocks
+    global Clocks_per_second
     bpm = scale_tempo(value)   # bpm (beats per minute).  "beat" == "quarter note" == 24 clocks
     Clocks_per_second = bpm * 24 / 60  # 12 at bpm == 30, 80 at bpm == 200
-    ticks = int(math.ceil(Ticks_per_clock * Clocks_per_second * Latency)) # 3-16 at 960 ppq
-    Latency_clocks = fraction(ticks, Ticks_per_clock)
+    #ticks = int(math.ceil(Ticks_per_clock * Clocks_per_second * Latency)) # 3-16 at 960 ppq
+    #Latency_clocks = fraction(ticks, Ticks_per_clock)
     midi_set_tempo(bpm)
     if Verbose:
-        trace(f"Got tempo {bpm=}, {Clocks_per_second=}, {Latency_clocks=}")
+        trace(f"Got tempo {bpm=}, {Clocks_per_second=}")
 
 Ch3_CC_commands = {  # does not include tempo Sys Common function
     0x55: channel,
@@ -206,8 +205,10 @@ def play(note):
         end_clock = note.start
     else:
         end_clock = note.start + note.duration_clocks
+
+    # wait to last minute to allow expressions to be updated
     current_clock = midi_queue_time()
-    trigger_clock = start_clock - Latency_clocks
+    trigger_clock = start_clock - Max_note_on_advance_clocks
     if Verbose:
         trace(f"play: note={note.note}, {start_clock=}, duration={note.duration_clocks}, {end_clock=}, "
               f"{current_clock=}, {trigger_clock=}")
@@ -215,23 +216,27 @@ def play(note):
         if Verbose:
             trace(f"play calling midi_pause, to_clock={trigger_clock}")
         midi_pause(to_clock=trigger_clock)
-    note_on, note_off, note_end_clock = prepare_note(note, start_clock, end_clock)
-    midi_send_event(note_on)
-    midi_send_event(note_off)
-    if note_end_clock > Final_clock:
-        Final_clock = note_end_clock
 
-def prepare_note(note, start_clock, end_clock):
-    return (NoteOnEvent(note.midi_note + Transpose, states.Channel, 43, tick=to_ticks(start_clock)),
-            NoteOffEvent(note.midi_note + Transpose, states.Channel, 0, tick=to_ticks(end_clock)),
-            end_clock)
+    # apply expressions:
+    channel = states.Channel
+    velocity = 43
+    # FIX: write
+
+    if not note.rest:
+        midi_send_event(
+          NoteOnEvent(note.midi_note + Transpose, channel, velocity, tick=to_ticks(start_clock)))
+        midi_send_event(
+          NoteOffEvent(note.midi_note + Transpose, channel, 0, tick=to_ticks(end_clock)))
+        if end_clock > Final_clock:
+            Final_clock = end_clock
 
 def run():
     import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--ppq', '-p', type=int, default=960)
-    parser.add_argument('--latency', '-l', type=float, default=0.005, help="in seconds")
+    parser.add_argument('--max_advance', '-m', type=int, default=18,  # 75% of qtr note (24)
+                        help="in clocks")
     parser.add_argument('--verbose', '-v', action="store_true", default=False)
 
     args = parser.parse_args()
@@ -239,7 +244,7 @@ def run():
     #trace(f"{args=}")
 
     try:
-        init(args.ppq, args.latency, args.verbose)
+        init(args.ppq, args.max_advance, args.verbose)
         send_parts()
     finally:
         if Final_clock:

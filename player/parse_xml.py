@@ -381,6 +381,7 @@ Time_modification = Parser("time-modification", as_class(Attrs),
 
 In_slur = False
 Tuplet_number = None
+Tags_seen = set()
 
 class Note:
     id = None
@@ -391,8 +392,9 @@ class Note:
     rest = False
     dot = False
     cue = False
-    slur_in = False
-    slur_out = False
+    slur_start = False
+    slur_middle = False
+    slur_stop = False
     tuplet_number = None      # [0-<time_modification.actual_notes>)
     tie = ()
     grace = None
@@ -410,6 +412,7 @@ class Note:
     tuplet = None
 
     # id: unique for whole file
+    # tags: [tag] for exp console input
     # color: #RRGGBB
     # dynamics: volume e.g., 58.89
     # print-object: e.g., no (ignore these!)
@@ -461,6 +464,7 @@ class Note:
         global In_slur, Tuplet_number
         self.trace = trace
         self.name = name
+        self.tags = []
         for key, value in properties.items():
             if key == 'pitch':
                 if value.alter == 0:
@@ -477,29 +481,50 @@ class Note:
                 #if key == 'tie' and len(value) > 1:
                 #    print(f"Note: got more than one tie: {value}")
                 setattr(self, key.replace('-', '_'), value)
-                if key == 'notations':
+                if key == 'grace':
+                    if hasattr(value, 'slash'):
+                        self.tags.append('grace_slash')
+                    else:
+                        self.tags.append('grace')
+                elif key == 'notations':
                     # set notations on self too.
                     for attr in "tied slur articulations arpeggiate fermata ornaments tuplet".split():
+                        # hoist these out of notations, up to the self.
                         if hasattr(value, attr):
+                            if attr in "arpeggiate fermata".split():
+                                self.tags.append(attr)
+                            elif attr == "ornaments" and hasattr(value.ornaments, 'trill_mark'):
+                                self.tags.append('trill')
+                            elif attr == "articulations":
+                                art = value.articulations
+                                for art_attr in "strong_accent accent staccato detached_legato " \
+                                                "staccatissimo tenuto".split():
+                                    if hasattr(art, art_attr):
+                                        self.tags.append(art_attr)
                             setattr(self, attr, getattr(value, attr))
+        if not self.rest:
+            self.tags.append(f"voice_{self.voice}")
+            self.tags.append(f"staff_{self.staff}")
 
-        # set self.slur_in/out
+        # set self.slur_start/out
         if self.slur is None:
             if In_slur:
-                self.slur_in = True
-                self.slur_out = True
+                self.slur_middle = True
+                self.tags.append('slur_middle')
         else:
             slur = self.slur
             if slur.type == 'start':
                 if In_slur:
                     print(f"{Last_measure=}: Multiple slur starts")
-                self.slur_out = True
+                self.tags.append('slur_start')
+                self.slur_start = True
                 In_slur = True
             elif slur.type == 'stop':
                 if not In_slur:
                     print(f"{Last_measure=}: Isolated slur stop")
                 else:
-                    self.slur_in = True
+                    self.tags.append('slur_stop')
+                    self.slur_stop = True
                     In_slur = False
             else:
                 print(f"{Last_measure=}: Unknown slur type: {slur.type}")
@@ -542,6 +567,9 @@ class Note:
                 print(f"{Last_measure=}: Note got type.size != cue, got {self.type.size} instead")
             if not self.cue:
                 print(f"{Last_measure=}: Note got type.size == cue, but no <cue/> element")
+        if self.rest and self.tags:
+            print(f"{Last_measure=}: rest duration={self.duration} has tags={self.tags}")
+        Tags_seen.update(self.tags)
 
     def __repr__(self):
         if self.rest:
@@ -773,11 +801,11 @@ def parse(filename):
         root = fromstring(xml_zip.read(musicxml))
     assert root.tag == "score-partwise", f"Expected root tag of 'score-partwise', got {root.tag}"
     parts = Score_partwise.parse(root)[1]
+    print(f"Tags_seen={sorted(Tags_seen)}")
     return parts
 
 
-
-if __name__ == "__main__":
+def run():
     import argparse
     
     parser = argparse.ArgumentParser()

@@ -206,9 +206,10 @@ class assign_measure:
         sorted_notes = [child for child in self.measure.children
                                if child.name == 'note' and not child.ignore]
         # ascending start, descending midi_note, descending duration
-        sorted_notes.sort(key=lambda note: (note.start, -note.midi_note,
+        sorted_notes.sort(key=lambda note: (note.start,                         # ascending start
+                                            -note.midi_note,                    # descending midi_note
                                             -10000 if note.grace is not None
-                                                   else -note.duration_clocks))
+                                                   else -note.duration_clocks)) # descending duration
         start_len = len(sorted_notes)
         if self.number == self.trace:
             print(f"measure({self.number}) sorted_notes before de-dup:")
@@ -257,6 +258,7 @@ class assign_measure:
                     for n, note in enumerate(chord, 1):
                         note.chord_top_down = n
                     for n, note in enumerate(reversed(chord), 1):
+                        note.tags.append(f"chord-{n}")
                         note.chord_bottom_up = n
                     first_note = None
             i += 1
@@ -266,6 +268,7 @@ class assign_measure:
             for n, note in enumerate(chord):
                 note.chord_top_down = n
             for n, note in enumerate(reversed(chord)):
+                note.tags.append(f"chord-{n}")
                 note.chord_bottom_up = n
         end_len = len(sorted_notes)
         if start_len != end_len:
@@ -274,10 +277,14 @@ class assign_measure:
         # add modifiers to each note to trigger expressions.
         for note in sorted_notes:
             note.modifiers = []
-            if note.slur_in:
-                note.modifiers.append('slur_in')
-            if note.slur_out:
-                note.modifiers.append('slur_out')
+            note.modifiers.append(f"voice_{note.voice}")
+            note.modifiers.append(f"staff_{note.staff}")
+            if note.slur_start:
+                note.modifiers.append('slur_start')
+            if note.slur_middle:
+                note.modifiers.append('slur_middle')
+            if note.slur_stop:
+                note.modifiers.append('slur_stop')
             if note.chord_bottom_up is not None:
                 if note.arpeggiate:
                     note.modifiers.append(f"arpeggiate-{note.chord_bottom_up}")
@@ -296,15 +303,14 @@ class assign_measure:
             if note.grace is not None:
                 grace = note.grace
                 if hasattr(grace, "slash") and grace.slash == "yes":
-                    note.modifiers.append("grace/")
+                    note.modifiers.append("grace_slash")
                 else:
                     note.modifiers.append("grace")
             if hasattr(note, "ornaments"):
                 ornaments = note.ornaments
                 if hasattr(ornaments, "trill_mark") and ornaments.trill_mark:
                     note.modifiers.append("trill")
-            for modifier in note.modifiers:
-                Modifiers_seen.add(modifier)
+            Modifiers_seen.update(note.modifiers)
         self.measure.sorted_notes = sorted_notes
         if self.number == self.trace:
             print(f"measure({self.number}) sorted_notes after de-dup:")
@@ -388,7 +394,10 @@ class assign_measure:
                 print(f"rest voice={note.voice}, start={self.start}, "
                       f"duration_clocks={note.duration_clocks}{print_object}")
             self.inc_start(note.duration_clocks)
-            note.ignore = True
+            if note.tags:  # e.g., "fermata"
+                note.midi_note = -1  # to sort last with notes of equal starts 
+            else:
+                note.ignore = True
             return
         if note.cue:
             if self.number == self.trace:
@@ -457,9 +466,9 @@ def assign_parts(parts, time_modification=False, trace=None, trace_no_print=Fals
         info.part_duration_clocks = part_duration_clocks
         print(f"Part {info.id}, {i + 1} measures, duration_clocks {part_duration_clocks} -- "
               f"expected {expected_duration_clocks}")
-    #print("Modifiers_seen:")
-    #for modifier in sorted(Modifiers_seen):
-    #    print('  ', modifier)
+    print("Modifiers_seen:")
+    for modifier in sorted(Modifiers_seen):
+        print('  ', modifier)
 
 
 def run():
