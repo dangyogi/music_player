@@ -51,12 +51,13 @@ def modify(note, channel, velocity):
     new_values = []
     for param_name, param_value \
      in zip(('channel', 'note_on', 'duration', 'velocity'),
-            (channel, note.start, note.duration_clocks, velocity)):
+            (channel, note.start, getattr(note, "duration_clocks", 0), velocity)):
         modifiers = Expressions[param_name]
         order = Modifier_order[param_name]
         for modifier in sorted(note.modifiers.intersection(modifiers.keys()), key=order.__getitem__):
             new_value = modifiers[modifier](param_value)
             if new_value is not None:
+                print(f"modify {param_name}: {modifier=}, {new_value=}")
                 break
         else:
             new_value = param_value
@@ -67,6 +68,8 @@ def modify(note, channel, velocity):
                 new_values.append(new_values[1] + new_value)  # applied to new start
         else:
             new_values.append(new_value)
+    print(f"modify({note.note}, {channel=}, {note.start=}, "
+          f"note.duration_clocks={getattr(note, 'duration_clocks', 0)}, {velocity=}) -> {new_values}")
     return new_values
 
 def trill(note, channel, velocity):
@@ -104,7 +107,7 @@ class param_instance:
         self.modifier = modifier
         self.channel = channel
         self.cc_param = cc_param
-        self.value = self.param_type.starting_value
+        self.set(self.param_type.starting_value)
 
         assert self.modifier not in Expressions[self.param_type.name], \
                f"{self.__class__.__name__}.__init__({modifier=}): " \
@@ -128,12 +131,16 @@ class adjust_replace(param_instance):
     def adjust(self, orig_value):
         if self.value is None:
             return None
+        assert round(self.value, 2), \
+               f"modifier={self.modifier}, {self.param_type.name}, {self.value=}"
         return self.value
 
 class adjust_percent(param_instance):
     def adjust(self, orig_value):
         if self.value is None:
             return None
+        assert round(self.value, 2), \
+               f"modifier={self.modifier}, {self.param_type.name}, {self.value=}"
         return orig_value * (1 + self.value)
 
 class channel(param_type):
@@ -147,7 +154,7 @@ Channel = channel()
 class note_on(param_type):
     instance=adjust_percent
     def __init__(self, starting_value=63):
-        super().__init__("note_on", 1, linear(0.0119, -0.75), 63, starting_value)
+        super().__init__("note_on", 1, linear(0.011969, -0.75), 63, starting_value)
 
 Note_on = note_on()
 
@@ -155,22 +162,22 @@ class duration(param_type):
     # operates on duration
     instance=adjust_percent
     def __init__(self, starting_value=63):
-        super().__init__("duration", 2, linear(0.0119, -0.75), 63, starting_value)
+        super().__init__("duration", 2, linear(0.011969, -0.75), 63, starting_value)
 
 Duration = duration()
 
 class grace_duration(param_type):
     # operates on duration
     instance=adjust_replace
-    def __init__(self, starting_value=48):
-        super().__init__("duration", 2, linear(0.125, 0.125), None, starting_value)
+    def __init__(self, starting_value=13):
+        super().__init__("duration", 2, linear(1.1575, 3), None, starting_value)
 
 Grace_duration = grace_duration()
 
 class velocity(param_type):
     instance=adjust_percent
-    def __init__(self, starting_value=63):
-        super().__init__("velocity", 3, linear(0.635, -40), 63, starting_value)
+    def __init__(self, starting_value=42):
+        super().__init__("velocity", 3, linear(0.011811, -0.50), 42, starting_value)
 
 Velocity = velocity()
 

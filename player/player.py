@@ -9,7 +9,7 @@ Here "Tick" refers to the tick used for queuing in ALSA.  The "tick" rate (ppq) 
 line argument (--ppq).  This defaults to 960 (so 40 ALSA queue "ticks" per MIDI CLOCK).
 '''
 
-from .expressions import Exp_CC_commands, linear, exponential
+from .expressions import Exp_CC_commands, linear, exponential, modify
 from . import states
 
 from .tools.midi_utils import *
@@ -195,24 +195,24 @@ def send_notes(measure, first_note):
         note = notes[i]
         if note.ignore:
             continue
-        if play(note):
+        if play(measure, note):
             notes_played += 1
     midi_drain_output()
     if Verbose:
         trace("  notes played:", notes_played)
     return notes_played
 
-def play(note):
+def play(measure, note):
     r'''Caller needs to do midi_drain_output().
     '''
     global Final_clock
 
     start_clock = note.start
-    if note.grace is not None:
-        trace(f"play: grace note; note={note.note}, {note.start=} -- setting end == start")
-        end_clock = note.start
-    else:
-        end_clock = note.start + note.duration_clocks
+   #if note.grace is not None:
+   #    trace(f"play: grace note; note={note.note}, {note.start=} -- setting end == start")
+   #    end_clock = note.start
+   #else:
+   #    end_clock = note.start + note.duration_clocks
 
     # wait to last minute to allow expressions to be updated
     current_clock = midi_queue_time()
@@ -228,13 +228,16 @@ def play(note):
     # apply expressions:
     channel = states.Channel
     velocity = Velocity
-    # FIX: write
+    new_specs = modify(note, channel + 1, velocity)
 
     if not note.rest:
+        assert new_specs is not None, \
+               f"play(measure={measure.number}, {note.note}): new_specs is None!"
+        channel, start_clock, end_clock, velocity = new_specs
         midi_send_event(
-          NoteOnEvent(note.midi_note + Transpose, channel, velocity, tick=to_ticks(start_clock)))
+          NoteOnEvent(note.midi_note + Transpose, channel - 1, velocity, tick=to_ticks(start_clock)))
         midi_send_event(
-          NoteOffEvent(note.midi_note + Transpose, channel, 0, tick=to_ticks(end_clock)))
+          NoteOffEvent(note.midi_note + Transpose, channel - 1, 0, tick=to_ticks(end_clock)))
         if end_clock > Final_clock:
             Final_clock = end_clock
 
