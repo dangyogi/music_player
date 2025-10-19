@@ -69,7 +69,7 @@ class assign_measure:
                           None if not in chord
         chord_bottom_up - note number in chord counting from lowest to highest pitch, 
                           None if not in chord
-        modifiers       - list of modifiers used as expession indexes
+        modifiers       - set of modifiers used as expession indexes
     '''
     def __init__(self, measure, index, time_modifications=False, trace=None, trace_no_print=False):
         self.trace = trace
@@ -265,9 +265,9 @@ class assign_measure:
         if first_note is not None:
             # chord goes to end
             chord = sorted_notes[first_note:]
-            for n, note in enumerate(chord):
+            for n, note in enumerate(chord, 1):
                 note.chord_top_down = n
-            for n, note in enumerate(reversed(chord)):
+            for n, note in enumerate(reversed(chord), 1):
                 note.tags.append(f"chord-{n}")
                 note.chord_bottom_up = n
         end_len = len(sorted_notes)
@@ -276,40 +276,40 @@ class assign_measure:
 
         # add modifiers to each note to trigger expressions.
         for note in sorted_notes:
-            note.modifiers = []
-            note.modifiers.append(f"voice_{note.voice}")
-            note.modifiers.append(f"staff_{note.staff}")
+            note.modifiers = set()
+            note.modifiers.add(f"voice_{note.voice}")
+            note.modifiers.add(f"staff_{note.staff}")
             if note.slur_start:
-                note.modifiers.append('slur_start')
+                note.modifiers.add('slur_start')
             if note.slur_middle:
-                note.modifiers.append('slur_middle')
+                note.modifiers.add('slur_middle')
             if note.slur_stop:
-                note.modifiers.append('slur_stop')
+                note.modifiers.add('slur_stop')
             if note.chord_bottom_up is not None:
                 if note.arpeggiate:
-                    note.modifiers.append(f"arpeggiate-{note.chord_bottom_up}")
+                    note.modifiers.add(f"arpeggiate_{note.chord_bottom_up}")
                 else:
-                    note.modifiers.append(f"chord-{note.chord_bottom_up}")
-            if note.tuplet is not None:
-                note.modifiers.append('tuplet')
+                    note.modifiers.add(f"chord_{note.chord_bottom_up}")
+           #if note.tuplet is not None:
+           #    note.modifiers.add('tuplet')
             if note.articulations is not None:
                 articulations = note.articulations
                 for attr in "strong_accent accent staccato detached_legato " \
                             "staccatissimo tenuto".split():
                     if hasattr(articulations, attr):
-                        note.modifiers.append(attr)
+                        note.modifiers.add(attr)
             if note.fermata is not None:
-                note.modifiers.append("fermata")
+                note.modifiers.add("fermata")
             if note.grace is not None:
                 grace = note.grace
                 if hasattr(grace, "slash") and grace.slash == "yes":
-                    note.modifiers.append("grace_slash")
+                    note.modifiers.add("grace_slash")
                 else:
-                    note.modifiers.append("grace")
+                    note.modifiers.add("grace")
             if hasattr(note, "ornaments"):
                 ornaments = note.ornaments
                 if hasattr(ornaments, "trill_mark") and ornaments.trill_mark:
-                    note.modifiers.append("trill")
+                    note.modifiers.add("trill")
             Modifiers_seen.update(note.modifiers)
         self.measure.sorted_notes = sorted_notes
         if self.number == self.trace:

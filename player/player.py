@@ -9,7 +9,7 @@ Here "Tick" refers to the tick used for queuing in ALSA.  The "tick" rate (ppq) 
 line argument (--ppq).  This defaults to 960 (so 40 ALSA queue "ticks" per MIDI CLOCK).
 '''
 
-from .expressions import Ch2_CC_commands, linear, exponential
+from .expressions import Exp_CC_commands, linear, exponential
 from . import states
 
 from .tools.midi_utils import *
@@ -19,6 +19,7 @@ Max_note_on_advance_clocks = None  # max clocks that note on may be advanced
 Final_clock = 0
 
 Transpose = 0
+Velocity = 43
 
 def init(ppq, max_advance, verbose):
     global Verbose, Max_note_on_advance_clocks, Ticks_per_clock, Control_port, Control_port_addr
@@ -56,6 +57,10 @@ def transpose(value):
     Transpose = scale_transpose(value)
     return False
 
+def dynamics(value):
+    global Velocity
+    Velocity = value
+
 scale_tempo = exponential(1.01506, 30)
 
 def tempo(value):
@@ -68,9 +73,10 @@ def tempo(value):
     if Verbose:
         trace(f"Got tempo {bpm=}, {Clocks_per_second=}")
 
-Ch3_CC_commands = {  # does not include tempo Sys Common function
+Ch2_CC_commands = {  # human channel 2.  does not include tempo Sys Common function
     0x55: channel,
     0x56: transpose,
+    0x57: dynamics,
 }
 
 def process_event(event):
@@ -91,10 +97,11 @@ def process_event(event):
                "forwarding to states.process_ch1_event")
         states.process_ch1_event(event)
     # event.type == EventType.CONTROLLER
-    elif event.channel == 1:
-        # All note related settings
+    elif event.channel == 1:  # human channel 2
+        # Global settings: Channel, Transpose, Channel Volume, Pedals
         if event.param not in Ch2_CC_commands:
-            trace(f"process_event({event=}): unknown ch2 event.param, {event.param=:#X}, forwarding")
+            trace(f"process_event({event=}): unknown ch2 CONTROLLER event.param, "
+                  f"{event.param=:#X}, forwarding")
             event.tick = 0
             event.dest = None
             event.channel = states.Channel
@@ -102,20 +109,21 @@ def process_event(event):
         else:
             trace(f"process_event({event=}): channel 1(2) {event.param=:#X}, {event.value=}")
             Ch2_CC_commands[event.param](event.value)
-    elif event.channel == 2:
-        # Global settings: Channel, Transpose, Channel Volume, Pedals
-        if event.param not in Ch3_CC_commands:
-            trace(f"process_event({event=}): unknown ch3 CONTROLLER event.param, "
-                  f"{event.param=:#X}, forwarding")
+    elif event.channel in (2, 3):  # human channels 3, 4
+        # All note related settings
+        cc_key = event.channel, event.param
+        if cc_key not in Exp_CC_commands:
+            trace(f"process_event({event=}): unknown ({event.channel=}, {event.param=}) "
+                  "-- forwarding")
             event.tick = 0
             event.dest = None
             event.channel = states.Channel
             midi_send_event(event)
         else:
-            trace(f"process_event({event=}): channel 2(3) {event.param=:#X}, {event.value=}")
-            Ch3_CC_commands[event.param](event.value)
+            trace(f"process_event({event=}): ({event.channel=}, {event.param=:#X}) = {event.value=}")
+            Exp_CC_commands[cc_key](event.value)
     else:
-        trace(f"process_event({event=}): unknown channel, {event.channel=}, forwarding")
+        trace(f"process_event({event=}): unknown channel, {event.channel=} -- forwarding")
         event.tick = 0
         event.dest = None
         event.channel = states.Channel
@@ -219,7 +227,7 @@ def play(note):
 
     # apply expressions:
     channel = states.Channel
-    velocity = 43
+    velocity = Velocity
     # FIX: write
 
     if not note.rest:
