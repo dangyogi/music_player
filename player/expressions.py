@@ -28,13 +28,28 @@ def exponential(m, min):
     return scale
 
 
-Expressions = defaultdict(dict)     # {param_name: {modifier: adjust_fn}}
+Expressions = defaultdict(dict)     # {param_name: {modifier: adjust_fn}}, adjust_fn(note, orig_value)
 Modifier_order = defaultdict(dict)  # {param_name: {modifier: order}}
 
 # fermata
 # trill
 
 # tuplet (not used)
+
+def current_start(note):
+    if "trill" in note.modifiers or "fermata" in note.modifiers:
+        return note.start
+    return modify_param(note, "note_on", note.start)
+
+def modify_param(note, param_name, param_value):
+    modifiers = Expressions[param_name]
+    order = Modifier_order[param_name]
+    for modifier in sorted(note.modifiers.intersection(modifiers.keys()), key=order.__getitem__):
+        new_value = modifiers[modifier](note, param_value)
+        if new_value is not None and new_value != param_value:
+            print(f"modify_param {param_name}: {modifier=}, {new_value=}")
+            return new_value
+    return param_value
 
 def modify(note, channel, velocity):
     r'''Returns (channel, note_on (clocks), note_off (clocks), velocity) or None.
@@ -52,15 +67,7 @@ def modify(note, channel, velocity):
     for param_name, param_value \
      in zip(('channel', 'note_on', 'duration', 'velocity'),
             (channel, note.start, getattr(note, "duration_clocks", 0), velocity)):
-        modifiers = Expressions[param_name]
-        order = Modifier_order[param_name]
-        for modifier in sorted(note.modifiers.intersection(modifiers.keys()), key=order.__getitem__):
-            new_value = modifiers[modifier](param_value)
-            if new_value is not None:
-                print(f"modify {param_name}: {modifier=}, {new_value=}")
-                break
-        else:
-            new_value = param_value
+        new_value = modify_param(note, param_name, param_value)
         if param_name == 'duration':
             if param_value: # normal note
                 new_values.append(note.start + new_value)     # applied to original start
@@ -68,8 +75,8 @@ def modify(note, channel, velocity):
                 new_values.append(new_values[1] + new_value)  # applied to new start
         else:
             new_values.append(new_value)
-    print(f"modify({note.note}, {channel=}, {note.start=}, "
-          f"note.duration_clocks={getattr(note, 'duration_clocks', 0)}, {velocity=}) -> {new_values}")
+   #print(f"modify({note.note}, {channel=}, {note.start=}, "
+   #      f"note.duration_clocks={getattr(note, 'duration_clocks', 0)}, {velocity=}) -> {new_values}")
     return new_values
 
 def trill(note, channel, velocity):
@@ -128,7 +135,7 @@ class param_instance:
             self.value = self.param_type.scale_fn(value)
 
 class adjust_replace(param_instance):
-    def adjust(self, orig_value):
+    def adjust(self, note, orig_value):
         if self.value is None:
             return None
         assert round(self.value, 2), \
@@ -136,12 +143,20 @@ class adjust_replace(param_instance):
         return self.value
 
 class adjust_percent(param_instance):
-    def adjust(self, orig_value):
+    def adjust(self, note, orig_value):
         if self.value is None:
             return None
         assert round(self.value, 2), \
                f"modifier={self.modifier}, {self.param_type.name}, {self.value=}"
         return orig_value * (1 + self.value)
+
+class adjust_start(param_instance):
+    def adjust(self, note, orig_value):
+        if self.value is None:
+            return note.start
+        assert round(self.value, 2), \
+               f"modifier={self.modifier}, {self.param_type.name}, {self.value=}"
+        return note.start - note.duration_clocks * self.value
 
 class channel(param_type):
     # operates on human channel number (starting at 1)
@@ -152,7 +167,7 @@ class channel(param_type):
 Channel = channel()
 
 class note_on(param_type):
-    instance=adjust_percent
+    instance=adjust_start
     def __init__(self, starting_value=63):
         super().__init__("note_on", 1, linear(0.011969, -0.75), 63, starting_value)
 

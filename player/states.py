@@ -173,7 +173,32 @@ class No_song(BaseState):
             trace(f"song_select: sending time sig={first_measure.time}")
         midi_set_time_signature(*first_measure.time, port=Control_port)  # sends to Exp Console
         # FIX: send key signature?
+        info = Parts[0][0]
+
+        clocks_per_measure = f"clocks_per_measure: {info.clocks_per_measure}"
+        part_duration_clocks = f"part_duration_clocks: {info.part_duration_clocks}"
+
+        # convert odd_durations to yaml.  It is a dict of str: int items.
+        dict_items = ', '.join(f"{as_str(key)}: {value}"
+                               for key, value in info.odd_durations.items())
+        odd_durations = f"odd_durations: {{{dict_items}}}"
+
+        # convert skips to yaml.  It is a list of [int, str].
+        list_elements = ''.join(f"- [{element[0]}, {as_str(element[1])}]\n"
+                                for element in info.skips)
+        skips = f"skips:\n{list_elements}"
+
+        sysex = '\n'.join((clocks_per_measure, part_duration_clocks, odd_durations, skips))
+        print("sysex:")
+        print(sysex)
+        midi_send_event(SysExEvent(sysex.encode("ASCII")), port=Control_port)
         self.switch(New_song_state)
+
+def as_str(x):
+    if '-' in x:
+        return x
+    return f'"{x}"'
+
 
 class SPP(No_song):
     def song_position_pointer(self, event):

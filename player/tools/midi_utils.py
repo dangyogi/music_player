@@ -16,10 +16,10 @@ Timing:
     parsing routines.
 
 Utility:
-    Log_1_01506 = math.log(1.01506) for bpm encoding
+    Log_1_01505 = math.log(1.01505) for bpm encoding
 
     data_to_bpm(data) -> bpm
-    bpm_to_data(bpm) -> data byte for Tempo message (30-200 as float)
+    bpm_to_data(bpm) -> data byte for Tempo message (bpm is 30-200 as float)
     time_sig_to_data(beats, beat_type) -> data byte for Time_sig message
     data_to_time_sig(data) -> (beats, beat_type), e.g., (6, 8)
     ppq_to_data(ppq) -> data byte for ControlChangeEvent to clock-master
@@ -123,6 +123,7 @@ from alsa_midi import (
    PitchBendEvent, NonRegisteredParameterChangeEvent, RegisteredParameterChangeEvent,
    SetQueueTempoEvent, SongPositionPointerEvent, ControlChangeEvent, SystemEvent,
    TimeSignatureEvent, StartEvent, ContinueEvent, StopEvent, ClockEvent, MidiBytesEvent,
+   SysExEvent,
 )
 from alsa_midi.client import StreamOpenType
 from alsa_midi.port import DEFAULT_PORT_TYPE
@@ -181,11 +182,12 @@ Queue_running = False
 
 Time_signature = None  # (beats, beat_type)
 
-# bpm = 30 * 1.01506^data
-# bpm = 30 * exp(Log_1_01506*data)
-# data = log(bpm / 30) / log(1.01506)
-# data = log(bpm / 30) / Log_1_01506
-Log_1_01506 = math.log(1.01506)
+# bpm = 30 * 1.01505^data
+# bpm = 30 * exp(Log_1_01505*data)
+# data = log(bpm / 30) / log(1.01505)
+# data = log(bpm / 30) / Log_1_01505
+Log_1_01505 = math.log(1.01505)
+Tempo_m = (200 - 30) / 127
 
 
 class WakeUpException(Exception):
@@ -195,16 +197,18 @@ class WakeUpException(Exception):
 def data_to_bpm(data):
     r'''result bpm is rounded to a sensible number of decimals.
     '''
-    # FIX: use exponential scale fn?
-    raw = 30 * math.exp(Log_1_01506*data)
-    if raw >= 67:
-        return int(round(raw))
-    return round(raw, 1)
+    return round(Tempo_m * data + 30)
+   #  FIX: use exponential scale fn?
+   #raw = 30 * math.exp(Log_1_01505*data)
+   #if raw >= 67:
+   #    return round(raw)
+   #return round(raw, 1)
 
 def bpm_to_data(bpm):
     r'''Can encode bpm between 30 and 200 inclusive.
     '''
-    return int(round(math.log(bpm / 30) / Log_1_01506))
+    return round((bpm - 30) / Tempo_m)
+   #return round(math.log(bpm / 30) / Log_1_01505)
 
 def time_sig_to_data(beats, beat_type):
     return (beats << 4) | (beat_type >> 1)

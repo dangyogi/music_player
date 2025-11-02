@@ -9,26 +9,29 @@ Here "Tick" refers to the tick used for queuing in ALSA.  The "tick" rate (ppq) 
 line argument (--ppq).  This defaults to 960 (so 40 ALSA queue "ticks" per MIDI CLOCK).
 '''
 
-from .expressions import Exp_CC_commands, linear, exponential, modify
+from .expressions import Exp_CC_commands, linear, modify, modify_param
 from . import states
 
 from .tools.midi_utils import *
 
 
 Max_note_on_advance_clocks = None  # max clocks that note on may be advanced
+Min_note_on_advance_clocks = None  # min clocks that note on may be advanced
 Final_clock = 0
 
 Transpose = 0
 Velocity = 43
 
-def init(ppq, max_advance, verbose):
-    global Verbose, Max_note_on_advance_clocks, Ticks_per_clock, Control_port, Control_port_addr
-    global Synth_port, Timer_port, Timer_port_addr
+def init(ppq, max_advance, min_advance, verbose):
+    global Verbose, Max_note_on_advance_clocks, Min_note_on_advance_clocks, Ticks_per_clock
+    global Control_port, Control_port_addr, Synth_port, Timer_port, Timer_port_addr
 
     Verbose = states.Verbose = verbose
     Max_note_on_advance_clocks = max_advance
+    Min_note_on_advance_clocks = min_advance
     Ticks_per_clock = fraction(ppq, 24)
-    trace(f"init: {ppq=}, {Verbose=}, {Max_note_on_advance_clocks=}, {Ticks_per_clock=}")
+    trace(f"init: {Max_note_on_advance_clocks=}, {Min_note_on_advance_clocks=},")
+    trace(f"      {ppq=}, {Verbose=}, {Ticks_per_clock=}")
     midi_set_verbose(verbose)
     midi_init("Player")
     Control_port = states.Control_port =  midi_create_inout_port("Control", default=False,
@@ -61,11 +64,9 @@ def dynamics(value):
     global Velocity
     Velocity = value
 
-scale_tempo = exponential(1.01506, 30)
-
 def tempo(value):
     global Clocks_per_second
-    bpm = scale_tempo(value)   # bpm (beats per minute).  "beat" == "quarter note" == 24 clocks
+    bpm = data_to_bpm(value)   # bpm (beats per minute).  "beat" == "quarter note" == 24 clocks
     Clocks_per_second = bpm * 24 / 60  # 12 at bpm == 30, 80 at bpm == 200
     #ticks = int(math.ceil(Ticks_per_clock * Clocks_per_second * Latency)) # 3-16 at 960 ppq
     #Latency_clocks = fraction(ticks, Ticks_per_clock)
@@ -207,23 +208,31 @@ def play(measure, note):
     '''
     global Final_clock
 
-    start_clock = note.start
+    start_clock = modify_param(note, "note_on", note.start)
    #if note.grace is not None:
    #    trace(f"play: grace note; note={note.note}, {note.start=} -- setting end == start")
    #    end_clock = note.start
    #else:
    #    end_clock = note.start + note.duration_clocks
-
-    # wait to last minute to allow expressions to be updated
     current_clock = midi_queue_time()
-    trigger_clock = start_clock - Max_note_on_advance_clocks
-    if Verbose:
-        trace(f"play: note={note.note}, {start_clock=}, duration={note.duration_clocks}, {end_clock=}, "
-              f"{current_clock=}, {trigger_clock=}")
-    if current_clock < trigger_clock:
+    advance = Max_note_on_advance_clocks
+
+    while advance >= Min_note_on_advance_clocks:
+        # wait to last minute to allow expressions to be updated
+        trigger_clock = start_clock - advance
+        if Verbose:
+            trace(f"play: note={note.note}, {start_clock=}, duration={note.duration_clocks}, "
+                  f"{end_clock=}, {current_clock=}, {trigger_clock=}")
+        if current_clock >= trigger_clock:
+            break
         if Verbose:
             trace(f"play calling midi_pause, to_clock={trigger_clock}")
         midi_pause(to_clock=trigger_clock)
+        current_clock = midi_queue_time()
+        start_clock = modify_param(note, "note_on", note.start)
+        if current_clock > trigger_clock:
+            trace(f"play: note={note.note}, {trigger_clock=}, {current_clock=}, {start_clock=}")
+        advance //= 2
 
     # apply expressions:
     channel = states.Channel
@@ -233,7 +242,13 @@ def play(measure, note):
     if not note.rest:
         assert new_specs is not None, \
                f"play(measure={measure.number}, {note.note}): new_specs is None!"
+        trace(f"modify({note.note}, start={note.start=}, "
+              f"duration_clocks={getattr(note, 'duration_clocks', 0)}, "
+              f"{Velocity=}, {current_clock=}) -> {new_specs}")
         channel, start_clock, end_clock, velocity = new_specs
+        if start_clock < current_clock - 0.1:
+            trace(f"play(measure={measure.number}, note={note.note}): missed note start by",
+                  current_clock - start_clock, "clocks")
         midi_send_event(
           NoteOnEvent(note.midi_note + Transpose, channel - 1, velocity, tick=to_ticks(start_clock)))
         midi_send_event(
@@ -246,8 +261,12 @@ def run():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--ppq', '-p', type=int, default=960)
-    parser.add_argument('--max_advance', '-m', type=int, default=18,  # 75% of qtr note (24)
-                        help="in clocks")
+    parser.add_argument('--max_advance', '-M', type=int, default=18,  # 75% of qtr note (24)
+                        help="in clocks")                             # 750mSec @ 60 bpm
+                                                                      # 225mSec @ 200 bpm
+    parser.add_argument('--min_advance', '-m', type=int, default=2,   #  8% of qtr note (24)
+                        help="in clocks")                             #  83mSec @ 60 bpm
+                                                                      #  25mSec @ 200 bpm
     parser.add_argument('--verbose', '-v', action="store_true", default=False)
 
     args = parser.parse_args()
@@ -255,7 +274,7 @@ def run():
     #trace(f"{args=}")
 
     try:
-        init(args.ppq, args.max_advance, args.verbose)
+        init(args.ppq, args.max_advance, args.min_advance, args.verbose)
         send_parts()
     finally:
         if Final_clock:

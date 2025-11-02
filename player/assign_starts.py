@@ -40,6 +40,7 @@ Note_durations = {  # the note durations in clocks (24/qtr-note)
 
 Measure_start = 0
 Modifiers_seen = set()
+Odd_durations = {}   # {measure: duration_clocks}
 
 class assign_measure:
     r'''Acts like a function, but provides a bucket for measure-level variables.
@@ -188,6 +189,7 @@ class assign_measure:
         if measure_duration != Clocks_per_measure:
             print(f"Measure {self.number} has incorrect length.  "
                   f"Got {measure_duration}, expected {Clocks_per_measure}")
+            Odd_durations[self.number] = measure_duration
         self.measure.start = Measure_start
         self.measure.duration_clocks = measure_duration
         Measure_start += self.measure.duration_clocks
@@ -452,6 +454,8 @@ def assign_parts(parts, time_modification=False, trace=None, trace_no_print=Fals
     '''
     global Divisions, Divisions_per_clock, Divisions_per_16th, Time
     global Divisions_per_measure, Clocks_per_measure, Measure_start, First_tie_notes, Last_tie_notes
+    global Odd_durations
+
     for info, measures in parts:
         Divisions = Divisions_per_clock = Divisions_per_16th = Time \
                   = Divisions_per_measure = Clocks_per_measure \
@@ -463,9 +467,13 @@ def assign_parts(parts, time_modification=False, trace=None, trace_no_print=Fals
             assign_measure(measure, i, time_modification, trace, trace_no_print)
         part_duration_clocks = Measure_start       # in clocks
         expected_duration_clocks = (i + 1) * Clocks_per_measure
+        info.clocks_per_measure = Clocks_per_measure
         info.part_duration_clocks = part_duration_clocks
+        info.odd_durations = Odd_durations
+        Odd_durations = {}
         print(f"Part {info.id}, {i + 1} measures, duration_clocks {part_duration_clocks} -- "
               f"expected {expected_duration_clocks}")
+        print("  odd_durations:", info.odd_durations)
     print("Modifiers_seen:")
     for modifier in sorted(Modifiers_seen):
         print('  ', modifier)

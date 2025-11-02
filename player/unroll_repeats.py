@@ -8,7 +8,7 @@ class measure_list:
     '''
     def __init__(self):
         self.body = []
-        self.repeat = None
+        self.repeat = None   # set to a repeat instance during repeat 
 
     def next_measure(self, measure):
         r'''Returns True if done.
@@ -40,7 +40,7 @@ class repeat:
     def __init__(self, first_measure):
         self.body = [first_measure]
         self.endings = []
-        self.repeat = None
+        self.repeat = None  # inner repeat
 
     def next_measure(self, measure):
         r'''Returns True if repeat is done.
@@ -79,6 +79,12 @@ class repeat:
               f"endings={tuple(len(ending) for ending in self.endings)}")
 
     def unroll(self, prefix=''):
+        r'''Assigns new measure.number to repeated measures.
+
+        These new numbers are the original measure.number '-' repeat number.
+
+        Also handles nested repeats.  These end up with multiple '-'s in the new measure numbers.
+        '''
         for num, ending in enumerate(self.endings, 1):
             for measure in self.body:
                 if isinstance(measure, repeat):
@@ -97,6 +103,8 @@ def unroll_repeats(measures):
     r'''Reassigns measure.number for repeated measures using dots: e.g., 3.1, 3.2
 
     Does deepcopy on repeated measures so that later changes to one copy don't affect the others.
+
+    Returns list of all measures, and skips = [(measure_num, measure.number), ...]
     '''
 
     # measures:
@@ -118,47 +126,66 @@ def unroll_repeats(measures):
     # output:
     #
     #   m1
-    #   m2.1: repeat_forward
-    #   m3.1
-    #   m4.1.1: repeat_forward
-    #   m5.1.1
-    #   m6.1.1: ending 1 start/stop, repeat_backward
-    #   m4.1.2: repeat_forward
-    #   m5.1.2:
-    #   m7.1.2: ending 2 start/stop
-    #   m8.1
-    #   m9.1: ending 1 start/stop, repeat_backward
-    #   m2.2: repeat_forward
-    #   m3.2
-    #   m4.2.1: repeat_forward
-    #   m5.2.1
-    #   m6.2.1: ending 1 start/stop, repeat_backward
-    #   m4.2.2: repeat_forward
-    #   m5.2.2:
-    #   m7.2.2: ending 2 start/stop
-    #   m8.2
-    #   m10.2: ending 2 start/stop
+    #   m2-1: repeat_forward
+    #   m3-1
+    #   m4-1-1: repeat_forward
+    #   m5-1-1
+    #   m6-1-1: ending 1 start/stop, repeat_backward
+    #   m4-1-2: repeat_forward
+    #   m5-1-2:
+    #   m7-1-2: ending 2 start/stop
+    #   m8-1
+    #   m9-1: ending 1 start/stop, repeat_backward
+    #   m2-2: repeat_forward
+    #   m3-2
+    #   m4-2-1: repeat_forward
+    #   m5-2-1
+    #   m6-2-1: ending 1 start/stop, repeat_backward
+    #   m4-2-2: repeat_forward
+    #   m5-2-2:
+    #   m7-2-2: ending 2 start/stop
+    #   m8-2
+    #   m10-2: ending 2 start/stop
     #   m11
     #
+
+    # accumulate the measures:
     ml = measure_list()
     for measure in measures:
         ml.next_measure(measure)
-    return list(ml)
+
+    # the __iter__ in the measure_list unrolls the repeats:
+    measures = list(ml)
+
+    skips = []  # [(measure_num, measure.number(i.e, name)), ...]
+    last_prefix = None
+    for measure_num, measure in enumerate(measures, 1):
+        current = str(measure.number).split('-', 1)
+        prefix = int(current[0])
+        suffix = current[1:]
+        if last_prefix is not None and last_prefix + 1 == prefix and last_suffix == suffix:
+            pass
+        else:
+            skips.append((measure_num, str(measure.number)))
+        last_prefix = prefix
+        last_suffix = suffix
+    return measures, skips
 
 
 def unroll_parts(parts, trace=False):
-    new_parts = []
+    new_parts = []  # [(part.score_part, measures_unrolled), ...] -- adds skips to score_part
     for part in parts:
-        measures_unrolled = unroll_repeats(part.measure)
+        measures_unrolled, skips = unroll_repeats(part.measure)
         if trace:
-            print(f"part({part.id}): {len(part.measure)=}, {len(measures_unrolled)=}")
+            print(f"part({part.id}): {len(part.measure)=}, {len(measures_unrolled)=}, {skips=}")
+        part.score_part.skips = skips
         new_parts.append((part.score_part, measures_unrolled))
     return new_parts
 
 
 def run():
     import argparse
-    from parse_xml import parse
+    from .parse_xml import parse
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--counts", "-c", action="store_true", default=False)
@@ -171,8 +198,8 @@ def run():
     new_parts = unroll_parts(parts, args.counts)
 
     if args.list:
-        for info, measures in new_parts:
-            print("part", info.id)
+        for info, measures, skip in new_parts:
+            print("part", info.id, "skips", info.skips)
             for measure in measures:
                 print(measure.number)
             print()
